@@ -1,0 +1,74 @@
+{
+  "models": [
+    {
+      "id": "gpt-5.4",
+      "provider": "chatgpt",
+      "upstream": "gpt-5.4",
+      "upstream_model": "gpt-5.4",
+      "owned_by": "project-sentinel",
+      "capabilities": [
+        "chat",
+        "code",
+        "reasoning",
+        "streaming",
+        "tools"
+      ]
+    },
+    {
+      "id": "gpt-5.4-pro",
+      "provider": "chatgpt",
+      "upstream": "gpt-5.4-pro",
+      "upstream_model": "gpt-5.4-pro",
+      "owned_by": "project-sentinel",
+      "capabilities": [
+        "chat",
+        "code",
+        "reasoning",
+        "streaming",
+        "tools"
+      ]
+    },
+    {
+      "id": "gpt-5-codex",
+      "provider": "chatgpt",
+      "upstream": "gpt-5-codex",
+      "upstream_model": "gpt-5-codex",
+      "owned_by": "project-sentinel",
+      "capabilities": [
+        "chat",
+        "code",
+        "reasoning",
+        "streaming",
+        "tools"
+      ]
+    },
+    {
+      "id": "codex-latest",
+      "provider": "chatgpt",
+      "upstream": "gpt-5.4",
+      "upstream_model": "gpt-5.4",
+      "owned_by": "project-sentinel",
+      "capabilities": [
+        "chat",
+        "code",
+        "reasoning",
+        "streaming",
+        "tools"
+      ]
+    },
+    {
+      "id": "sentinel-router",
+      "provider": "chatgpt",
+      "upstream": "gpt-5.4",
+      "upstream_model": "gpt-5.4",
+      "owned_by": "project-sentinel",
+      "capabilities": [
+        "chat",
+        "code",
+        "reasoning",
+        "streaming",
+        "tools"
+      ]
+    }
+  ]
+}

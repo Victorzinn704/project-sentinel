@@ -1,0 +1,77 @@
+{
+  "info": {
+    "name": "Project Sentinel Proxy",
+    "description": "Coleção para testar as rotas e rodar o Collection Runner simulando múltiplos requests nas contas.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/healthz",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["healthz"]
+        }
+      }
+    },
+    {
+      "name": "2. Get Models",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer replace-with-a-random-local-api-key",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:8080/v1/models",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["v1", "models"]
+        }
+      }
+    },
+    {
+      "name": "3. Chat Completion (Teste Proxy)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer replace-with-a-random-local-api-key",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"model\": \"sentinel-router\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"Olá! Escreva um pequeno parágrafo sobre concorrência em Go. Siga as instruções estritamente para testarmos a conexão.\", \"name\": \"tester\"}\n  ],\n  \"stream\": true\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:8080/v1/chat/completions",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["v1", "chat", "completions"]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+services:
+  sentinel:
+    image: project-sentinel:latest
+    container_name: sentinel
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../sessions:/data/sessions
+      - ../.env:/app/.env:ro
+    environment:
+      SESSION_STORE_PATH: /data/sessions
+      STATE_DB_PATH: /data/sessions/state.db
+      SENTINEL_API_KEY: ${SENTINEL_API_KEY}
+      MODELS_CONFIG_PATH: /app/configs/models.json
+      OPENAI_RESOURCE_01_API_KEY: ${OPENAI_RESOURCE_01_API_KEY}
+      OPENAI_RESOURCE_02_API_KEY: ${OPENAI_RESOURCE_02_API_KEY}
+      OPENAI_RESOURCE_03_API_KEY: ${OPENAI_RESOURCE_03_API_KEY}
+      OPENAI_RESOURCE_04_API_KEY: ${OPENAI_RESOURCE_04_API_KEY}
+      OPENAI_RESOURCE_05_API_KEY: ${OPENAI_RESOURCE_05_API_KEY}
+      OPENAI_RESOURCE_06_API_KEY: ${OPENAI_RESOURCE_06_API_KEY}
+      OPENAI_RESOURCE_07_API_KEY: ${OPENAI_RESOURCE_07_API_KEY}
+      OPENAI_RESOURCE_08_API_KEY: ${OPENAI_RESOURCE_08_API_KEY}
+      OPENAI_RESOURCE_09_API_KEY: ${OPENAI_RESOURCE_09_API_KEY}
+      OPENAI_RESOURCE_10_API_KEY: ${OPENAI_RESOURCE_10_API_KEY}
+      OPENAI_RESOURCE_11_API_KEY: ${OPENAI_RESOURCE_11_API_KEY}
+    restart: unless-stopped
