@@ -44,8 +44,8 @@ func TestValidateAcceptsDistinctProductionKeys(t *testing.T) {
 		MaxAttempts:                 3,
 		QuotaRefreshIntervalSeconds: 0,
 		SessionEncryptionKey:        "12345678901234567890123456789012",
-		APIKey:                      "sk-sentinel-012345678901234567890",
-		AdminAPIKey:                 "sk-sentinel-admin-abcdefghijklmnopqrstuvwxyz",
+		APIKey:                      "example-sentinel-api-key-012345678901234567890",
+		AdminAPIKey:                 "example-sentinel-admin-key-abcdefghijklmnopqrstuvwxyz",
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected config to validate, got %v", err)

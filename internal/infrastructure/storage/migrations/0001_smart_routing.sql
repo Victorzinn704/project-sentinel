@@ -1,6 +1,5 @@
 CREATE TABLE IF NOT EXISTS accounts (
     account_id TEXT PRIMARY KEY,
-    provider TEXT NOT NULL DEFAULT 'chatgpt',
     status TEXT NOT NULL CHECK (status IN ('active', 'cooldown', 'disabled', 'attention_required')),
     last_used_at TEXT,
     daily_usage_count INTEGER NOT NULL DEFAULT 0,
@@ -13,13 +12,6 @@ CREATE TABLE IF NOT EXISTS accounts (
     active_leases INTEGER NOT NULL DEFAULT 0,
     max_concurrent INTEGER NOT NULL DEFAULT 1,
     retry_after_until TEXT,
-    quota_source TEXT NOT NULL DEFAULT '',
-    quota_refreshed_at TEXT,
-    quota_blocked_until TEXT,
-    five_hour_remaining_pct INTEGER,
-    five_hour_reset_at TEXT,
-    weekly_remaining_pct INTEGER,
-    weekly_reset_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

@@ -23,7 +23,7 @@ type ModelLister interface {
 }
 
 type ModelResolver interface {
-	Resolve(requestedModel string) (domain.ResolvedModel, bool)
+	Resolve(modelID string) (domain.ResolvedModel, bool)
 }
 
 // Executor performs an upstream provider round-trip. Lease acquire/release
