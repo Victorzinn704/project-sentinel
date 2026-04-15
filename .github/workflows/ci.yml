@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Publication guard
+        shell: pwsh
+        run: ./tools/publication_guard.ps1 -Strict
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build
+        run: go build -o ./bin/sentinel ./cmd/sentinel
