@@ -66,7 +66,17 @@ func NewRouter(deps RouterDeps) http.Handler {
 		mux.HandleFunc("/v1/chat/completions", protectedChatHandler)
 		mux.HandleFunc("/v1/v1/chat/completions", protectedChatHandler)
 
-		responsesHandler := method(http.MethodPost, auth(deps.APIKey, PostOpenAIResponsesHandler(chatHandler, deps.DefaultModel)))
+		var codexPassthroughForResponses http.HandlerFunc
+		if deps.CodexPassthrough != nil {
+			codexPassthroughForResponses = PostCodexPassthroughHandler(
+				deps.CodexPassthrough,
+				deps.AccountAcquirer,
+				deps.SessionLoader,
+				deps.LeaseReleaser,
+				deps.Logger,
+			)
+		}
+		responsesHandler := method(http.MethodPost, auth(deps.APIKey, PostOpenAIResponsesHandler(chatHandler, codexPassthroughForResponses, deps.DefaultModel)))
 		mux.HandleFunc("/responses", responsesHandler)
 		mux.HandleFunc("/v1/responses", responsesHandler)
 		mux.HandleFunc("/v1/v1/responses", responsesHandler)

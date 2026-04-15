@@ -12,11 +12,25 @@ import (
 	"time"
 )
 
-func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, defaultModel string) http.HandlerFunc {
+func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, codexPassthroughHandler http.HandlerFunc, defaultModel string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw, err := readLimitedBody(w, r, openAIRequestLimitBytes)
 		if err != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error(), "invalid_body")
+			return
+		}
+
+		// Codex CLI talks the native Codex backend protocol on top of the
+		// Responses API URL when configured with wire_api="responses". Skip
+		// the lossy translation pipeline (which drops `tools`, tool_calls and
+		// reasoning events) and proxy the request byte-for-byte.
+		if codexPassthroughHandler != nil && isCodexCLIRequest(r) {
+			passReq := r.Clone(r.Context())
+			passReq.URL.Path = "/backend-api/codex/responses"
+			passReq.Body = io.NopCloser(bytes.NewReader(raw))
+			passReq.ContentLength = int64(len(raw))
+			passReq.Header = r.Header.Clone()
+			codexPassthroughHandler(w, passReq)
 			return
 		}
 
@@ -804,6 +818,21 @@ func textFromAny(value any) string {
 		}
 		return string(encoded)
 	}
+}
+
+// isCodexCLIRequest detects requests originating from the patched Codex CLI
+// pointing at Sentinel. Codex CLI identifies itself via the "originator"
+// header and a User-Agent prefixed with "codex_cli_rs". Either signal is
+// sufficient.
+func isCodexCLIRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if originator := strings.ToLower(strings.TrimSpace(r.Header.Get("Originator"))); strings.HasPrefix(originator, "codex_cli") {
+		return true
+	}
+	ua := strings.ToLower(r.Header.Get("User-Agent"))
+	return strings.Contains(ua, "codex_cli_rs") || strings.Contains(ua, "codex-cli")
 }
 
 func responseIDFromChatID(chatID string) string {

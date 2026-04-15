@@ -5,10 +5,15 @@ import "strings"
 var internalTraceStrongMarkers = []string{
 	"to=functions.",
 	"to=multi_tool_use.",
+	"to=multi_tool_use.parallel",
+	"to=update_plan",
+	"to=shell ",
+	"to=shell\n",
 	"recipient_name\":\"functions.",
 	"recipient_name\":\"multi_tool_use.",
 	"*** begin patch",
 	"functions.exec_command",
+	"asypay_json_string",
 }
 
 var internalTraceWeakMarkers = []string{
@@ -30,11 +35,15 @@ var internalTraceWeakMarkers = []string{
 var internalTraceInlineMarkers = []string{
 	"to=functions.",
 	"to=multi_tool_use.",
+	"to=update_plan",
+	"to=shell ",
+	"to=shell\n",
 	"recipient_name\":\"functions.",
 	"recipient_name\":\"multi_tool_use.",
 	"\"tool_uses\"",
 	"*** begin patch",
 	"*** end patch",
+	"asypay_json_string",
 }
 
 func sanitizeInternalTraceText(text string) string {
