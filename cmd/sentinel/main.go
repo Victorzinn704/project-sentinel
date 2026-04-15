@@ -66,6 +66,11 @@ func run() error {
 	if err := stateStore.Migrate(context.Background()); err != nil {
 		return err
 	}
+	if reclaimed, err := stateStore.ReclaimStaleLeases(context.Background()); err != nil {
+		return fmt.Errorf("reclaim stale leases: %w", err)
+	} else if reclaimed > 0 {
+		appLogger.Warn("reclaimed stale account leases on startup", zap.Int64("count", reclaimed))
+	}
 	stateStore.SetRotationStrategy(cfg.RotationStrategy)
 	if err := backfillAccountStates(context.Background(), cfg.SessionStorePath, sessionStore, stateStore); err != nil {
 		return err
@@ -107,7 +112,7 @@ func run() error {
 	}
 	refreshCancel()
 
-	router := httpdelivery.NewRouter(httpdelivery.RouterDeps{
+		router := httpdelivery.NewRouter(httpdelivery.RouterDeps{
 		AccountRegistrar:    accountService,
 		Executor:            providerRegistry,
 		CodexPassthrough:    chatGPTAdapter,
@@ -121,9 +126,10 @@ func run() error {
 		RotationInspector:   stateStore,
 		ForceModeManager:    stateStore,
 		QuotaRefresher:      quotaRefresher,
-		Logger:              appLogger,
-		APIKey:              cfg.APIKey,
-		DefaultModel:        cfg.DefaultModel,
+			Logger:              appLogger,
+			APIKey:              cfg.APIKey,
+			AdminAPIKey:         cfg.AdminAPIKey,
+			DefaultModel:        cfg.DefaultModel,
 		ReadyCheck: func(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
@@ -204,7 +210,7 @@ func backfillAccountStates(ctx context.Context, sessionStorePath string, session
 			Status:        domain.AccountRoutingActive,
 			DailyLimit:    100,
 			PlanPriority:  0,
-			MaxConcurrent: 1,
+			MaxConcurrent: 3,
 		}); err != nil {
 			return fmt.Errorf("backfill account state %s: %w", accountID, err)
 		}

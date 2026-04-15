@@ -204,6 +204,30 @@ Revogar por rotação:
 .\tools\sentinelctl.ps1 key-revoke
 ```
 
+Ver admin key mascarada:
+
+```powershell
+.\tools\sentinelctl.ps1 admin-key-show
+```
+
+Rotacionar admin key:
+
+```powershell
+.\tools\sentinelctl.ps1 admin-key-new
+```
+
+Rotacionar a chave de sessão com recriptografia das sessões atuais:
+
+```powershell
+.\tools\sentinelctl.ps1 session-key-rotate
+```
+
+Rotacionar runtime key, admin key e session key em uma passada:
+
+```powershell
+.\tools\sentinelctl.ps1 secrets-rotate
+```
+
 Gerar sem reiniciar:
 
 ```powershell
@@ -244,7 +268,7 @@ Configure:
 ```txt
 Base URL: http://127.0.0.1:8080/v1
 API Key: valor de SENTINEL_API_KEY no .env
-Model: sentinel-router
+Model: gpt-5.4
 ```
 
 Se quiser chamar direto:
@@ -262,7 +286,7 @@ Outro PC/servidor/cloud: 127.0.0.1 aponta para a máquina do cliente, não para 
 
 Para outro dispositivo enxergar, rode o Sentinel em um servidor acessível ou use um túnel seguro com HTTPS.
 
-Se o cliente não enviar `model`, o Sentinel usa `DEFAULT_MODEL=sentinel-router`. Isso evita erro `missing_model` em clientes que separam o model em outra configuração ou deixam o campo vazio.
+Se o cliente não enviar `model`, o Sentinel usa `DEFAULT_MODEL=gpt-5.4`. Isso evita erro `missing_model` em clientes que separam o model em outra configuração ou deixam o campo vazio. Ainda assim, voce pode escolher qualquer modelo existente enviando o campo `model` na request.
 
 ## 10. Usar No Codex CLI
 
@@ -281,7 +305,7 @@ O comando escreve um bloco gerenciado em:
 Configuração aplicada:
 
 ```toml
-model = "sentinel-router"
+model = "gpt-5.4"
 model_provider = "sentinel"
 model_reasoning_effort = "medium"
 
@@ -321,7 +345,7 @@ Se você quiser alterar o Codex global da máquina em vez do projeto atual:
 Se quiser apontar o Codex global para um Sentinel remoto:
 
 ```powershell
-.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL http://147.15.60.224:8080/v1
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://app.deskimperial.online/suporte/v1
 ```
 
 Como o config padrão agora é local ao projeto, rode o `codex` a partir da pasta do projeto para ele usar `.\.codex\config.toml`.

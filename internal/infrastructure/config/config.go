@@ -25,6 +25,7 @@ type Config struct {
 	MaxAttempts                 int
 	SessionEncryptionKey        string
 	APIKey                      string
+	AdminAPIKey                 string
 }
 
 func Load() (Config, error) {
@@ -57,13 +58,14 @@ func Load() (Config, error) {
 		ModelsConfigPath:            env("MODELS_CONFIG_PATH", "./configs/models.json"),
 		LogLevel:                    env("LOG_LEVEL", "info"),
 		RotationStrategy:            rotationStrategy,
-		DefaultModel:                env("DEFAULT_MODEL", "sentinel-router"),
+		DefaultModel:                env("DEFAULT_MODEL", "gpt-5.4"),
 		DefaultReasoningEffort:      defaultReasoningEffort,
 		QuotaRefreshIntervalSeconds: quotaRefreshIntervalSeconds,
 		RequestTimeoutSeconds:       requestTimeoutSeconds,
 		MaxAttempts:                 maxAttempts,
 		SessionEncryptionKey:        os.Getenv("SESSION_ENCRYPTION_KEY"),
 		APIKey:                      os.Getenv("SENTINEL_API_KEY"),
+		AdminAPIKey:                 os.Getenv("SENTINEL_ADMIN_API_KEY"),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -97,6 +99,21 @@ func (c Config) Validate() error {
 	}
 	if c.AppEnv == "production" && c.APIKey == "" {
 		return fmt.Errorf("config validation failed: SENTINEL_API_KEY is required in production")
+	}
+	if c.AppEnv == "production" && c.AdminAPIKey == "" {
+		return fmt.Errorf("config validation failed: SENTINEL_ADMIN_API_KEY is required in production")
+	}
+	if c.APIKey != "" && len(c.APIKey) < len("sk-sentinel-0123456789") {
+		return fmt.Errorf("config validation failed: SENTINEL_API_KEY is too short")
+	}
+	if c.AdminAPIKey != "" && len(c.AdminAPIKey) < len("sk-sentinel-admin-0123456789") {
+		return fmt.Errorf("config validation failed: SENTINEL_ADMIN_API_KEY is too short")
+	}
+	if c.APIKey != "" && c.AdminAPIKey != "" && c.APIKey == c.AdminAPIKey {
+		return fmt.Errorf("config validation failed: SENTINEL_ADMIN_API_KEY must differ from SENTINEL_API_KEY")
+	}
+	if c.SessionEncryptionKey != "" && len(c.SessionEncryptionKey) != 32 {
+		return fmt.Errorf("config validation failed: SESSION_ENCRYPTION_KEY must be exactly 32 bytes")
 	}
 
 	if c.RequestTimeoutSeconds <= 0 {

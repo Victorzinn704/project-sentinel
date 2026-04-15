@@ -10,8 +10,8 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"time"
 )
@@ -30,33 +30,29 @@ func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, codexPassthroughHa
 			return
 		}
 
-		usePassthrough, decisionReason := shouldUseCodexPassthrough(r, raw)
+		decision := decideResponsesRoute(r, raw, defaultModel)
 		if responsesRoutingProbeEnabled() {
-			logResponsesRoutingDecision(r, raw, usePassthrough, decisionReason)
+			logResponsesRoutingDecision(r, raw, decision)
 		}
 
 		// Codex CLI talks the native Codex backend protocol on top of the
 		// Responses API URL when configured with wire_api="responses". Skip
 		// the lossy translation pipeline (which drops `tools`, tool_calls and
 		// reasoning events) and proxy the request byte-for-byte.
-		if codexPassthroughHandler != nil && usePassthrough {
-			passthroughRaw, rewrittenModel := normalizeCodexPassthroughModel(raw, defaultModel)
-			if rewrittenModel {
-				decisionReason += "+model_rewrite"
-			}
-			w.Header().Set("X-Sentinel-Responses-Route", "passthrough")
-			w.Header().Set("X-Sentinel-Responses-Reason", decisionReason)
+		if codexPassthroughHandler != nil && decision.route == responsesRoutePassthrough {
+			w.Header().Set("X-Sentinel-Responses-Route", string(decision.route))
+			w.Header().Set("X-Sentinel-Responses-Reason", decision.reason)
 			passReq := r.Clone(r.Context())
 			passReq.URL.Path = "/backend-api/codex/responses"
-			passReq.Body = io.NopCloser(bytes.NewReader(passthroughRaw))
-			passReq.ContentLength = int64(len(passthroughRaw))
+			passReq.Body = io.NopCloser(bytes.NewReader(decision.passthroughBody))
+			passReq.ContentLength = int64(len(decision.passthroughBody))
 			passReq.Header = r.Header.Clone()
 			codexPassthroughHandler(w, passReq)
 			return
 		}
 
-		w.Header().Set("X-Sentinel-Responses-Route", "translate")
-		w.Header().Set("X-Sentinel-Responses-Reason", decisionReason)
+		w.Header().Set("X-Sentinel-Responses-Route", string(responsesRouteTranslate))
+		w.Header().Set("X-Sentinel-Responses-Reason", decision.reason)
 
 		chatRaw, responsesModel, stream, err := responsesToChatCompletionsRaw(raw, defaultModel)
 		if err != nil {
@@ -120,48 +116,6 @@ func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, codexPassthroughHa
 	}
 }
 
-func shouldUseCodexPassthrough(r *http.Request, raw []byte) (bool, string) {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv(responsesRoutingModeEnv)))
-	switch mode {
-	case "passthrough", "native", "force_passthrough":
-		return true, "env_passthrough"
-	case "translate", "force_translate", "compat":
-		return false, "env_translate"
-	}
-
-	if isCodexCLIRequest(r) {
-		return true, "codex_cli_header"
-	}
-	if responsesRequestHasTools(raw) {
-		return true, "tools_present"
-	}
-
-	return false, "default_translate"
-}
-
-func responsesRequestHasTools(raw []byte) bool {
-	var body map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &body); err != nil {
-		return false
-	}
-	toolsRaw, ok := body["tools"]
-	if !ok {
-		return false
-	}
-
-	trimmed := bytes.TrimSpace(toolsRaw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("[]")) {
-		return false
-	}
-
-	var tools []json.RawMessage
-	if err := json.Unmarshal(trimmed, &tools); err == nil {
-		return len(tools) > 0
-	}
-
-	return true
-}
-
 func normalizeCodexPassthroughModel(raw []byte, defaultModel string) ([]byte, bool) {
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &body); err != nil {
@@ -215,7 +169,7 @@ func responsesRoutingProbeEnabled() bool {
 	return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 
-func logResponsesRoutingDecision(r *http.Request, raw []byte, usePassthrough bool, reason string) {
+func logResponsesRoutingDecision(r *http.Request, raw []byte, decision responsesRouteDecision) {
 	bodyHash := sha256.Sum256(raw)
 	hashPrefix := hex.EncodeToString(bodyHash[:6])
 	ua := strings.TrimSpace(r.Header.Get("User-Agent"))
@@ -231,12 +185,12 @@ func logResponsesRoutingDecision(r *http.Request, raw []byte, usePassthrough boo
 		"responses routing probe method=%s path=%s passthrough=%t reason=%s request_id=%q body_bytes=%d body_sha256_12=%s has_tools=%t ua=%q originator=%q",
 		r.Method,
 		r.URL.Path,
-		usePassthrough,
-		reason,
+		decision.route == responsesRoutePassthrough,
+		decision.reason,
 		strings.TrimSpace(r.Header.Get("X-Request-ID")),
 		len(raw),
 		hashPrefix,
-		responsesRequestHasTools(raw),
+		decision.hasTools,
 		ua,
 		originator,
 	)
@@ -479,7 +433,7 @@ func writeResponsesSSEFromChatSSE(w io.Writer, raw []byte, fallbackModel string)
 		return err
 	}
 	if err := writeEvent(map[string]any{
-		"type": "response.output_item.added",
+		"type":         "response.output_item.added",
 		"output_index": 0,
 		"item": map[string]any{
 			"id":      messageID,
@@ -635,15 +589,15 @@ type responsesStreamBridge struct {
 	header     http.Header
 	model      string
 
-	responseID string
-	messageID  string
-	created    int64
-	started    bool
-	failed     bool
+	responseID  string
+	messageID   string
+	created     int64
+	started     bool
+	failed      bool
 	itemStarted bool
 	partStarted bool
-	statusCode int
-	fullText   strings.Builder
+	statusCode  int
+	fullText    strings.Builder
 }
 
 func newResponsesStreamBridge(downstream http.ResponseWriter, model string) *responsesStreamBridge {

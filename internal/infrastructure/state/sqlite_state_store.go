@@ -214,7 +214,7 @@ ON CONFLICT(account_id) DO UPDATE SET
 	provider = excluded.provider,
 	daily_limit = excluded.daily_limit,
 	plan_priority = excluded.plan_priority,
-	max_concurrent = excluded.max_concurrent,
+	max_concurrent = MAX(excluded.max_concurrent, accounts.max_concurrent),
 	quota_source = excluded.quota_source,
 	quota_refreshed_at = excluded.quota_refreshed_at,
 	quota_blocked_until = excluded.quota_blocked_until,
@@ -307,47 +307,6 @@ func (s *SQLiteStateStore) RotationStrategy() domain.RotationStrategy {
 	return s.rotationStrategy
 }
 
-// rotationOrderBy returns the SQL ORDER BY fragment that implements the strategy.
-// Each clause is hand-written — string interpolation is safe because values
-// come from a closed enum, not user input.
-func rotationOrderBy(strategy domain.RotationStrategy) string {
-	switch strategy {
-	case domain.RotationQuotaFirst:
-		return `ORDER BY
-	CASE
-		WHEN quota_refreshed_at IS NULL THEN 1
-		ELSE 0
-	END ASC,
-	CASE
-		WHEN five_hour_remaining_pct IS NULL AND weekly_remaining_pct IS NULL THEN -1
-		WHEN five_hour_remaining_pct IS NULL THEN weekly_remaining_pct
-		WHEN weekly_remaining_pct IS NULL THEN five_hour_remaining_pct
-		WHEN five_hour_remaining_pct < weekly_remaining_pct THEN five_hour_remaining_pct
-		ELSE weekly_remaining_pct
-	END DESC,
-	plan_priority DESC,
-	daily_usage_count ASC,
-	COALESCE(last_used_at, '1970-01-01T00:00:00Z') ASC,
-	latency_ewma_ms ASC`
-	case domain.RotationRoundRobin:
-		return `ORDER BY COALESCE(last_used_at, '1970-01-01T00:00:00Z') ASC`
-	case domain.RotationRandom:
-		return `ORDER BY RANDOM()`
-	case domain.RotationWeighted:
-		return `ORDER BY
-	plan_priority DESC,
-	COALESCE(last_used_at, '1970-01-01T00:00:00Z') ASC,
-	daily_usage_count ASC`
-	default:
-		// RotationLeastUsed
-		return `ORDER BY
-	daily_usage_count ASC,
-	COALESCE(last_used_at, '1970-01-01T00:00:00Z') ASC,
-	latency_ewma_ms ASC,
-	plan_priority DESC`
-	}
-}
-
 func (s *SQLiteStateStore) AcquireBestAccountLease(ctx context.Context, requestID string) (*domain.Lease, *domain.AccountState, error) {
 	return s.AcquireLease(ctx, domain.AccountLeaseRequest{
 		RequestID: requestID,
@@ -404,6 +363,7 @@ func (s *SQLiteStateStore) AcquireLease(ctx context.Context, req domain.AccountL
 	if err := s.refreshEligibility(ctx, conn, now); err != nil {
 		return nil, nil, err
 	}
+	policy := newLeaseSelectionPolicy(provider, now, s.rotationStrategy)
 
 	forcedAccountID := strings.TrimSpace(req.ForcedAccountID)
 	if forcedAccountID == "" {
@@ -415,9 +375,9 @@ func (s *SQLiteStateStore) AcquireLease(ctx context.Context, req domain.AccountL
 
 	var selected *domain.AccountState
 	if forcedAccountID != "" {
-		selected, err = s.selectPinnedAccountTx(ctx, conn, forcedAccountID, provider, now)
+		selected, err = s.selectPinnedAccountTx(ctx, conn, forcedAccountID, policy)
 	} else {
-		selected, err = s.selectBestAccountTx(ctx, conn, provider, now)
+		selected, err = s.selectBestAccountTx(ctx, conn, policy)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -437,48 +397,8 @@ func (s *SQLiteStateStore) AcquireLease(ctx context.Context, req domain.AccountL
 	return lease, selected, nil
 }
 
-func (s *SQLiteStateStore) selectBestAccountTx(ctx context.Context, conn *sql.Conn, provider string, now time.Time) (*domain.AccountState, error) {
-	query := `
-SELECT
-	account_id,
-	provider,
-	status,
-	last_used_at,
-	daily_usage_count,
-	daily_limit,
-	usage_date,
-	cooldown_until,
-	latency_ewma_ms,
-	error_count,
-	plan_priority,
-	active_leases,
-	max_concurrent,
-	retry_after_until,
-	quota_source,
-	quota_refreshed_at,
-	quota_blocked_until,
-	five_hour_remaining_pct,
-	five_hour_reset_at,
-	weekly_remaining_pct,
-	weekly_reset_at,
-	created_at,
-	updated_at
-FROM accounts
-WHERE status = 'active'
-  AND (cooldown_until IS NULL OR cooldown_until <= ?)
-  AND (quota_blocked_until IS NULL OR quota_blocked_until <= ?)
-  AND daily_usage_count < daily_limit
-  AND active_leases < max_concurrent
-`
-
-	args := []any{formatTime(now), formatTime(now)}
-	if provider != "" {
-		query += "  AND provider = ?\n"
-		args = append(args, provider)
-	}
-
-	query += rotationOrderBy(s.rotationStrategy) + "\nLIMIT 1\n"
-
+func (s *SQLiteStateStore) selectBestAccountTx(ctx context.Context, conn *sql.Conn, policy leaseSelectionPolicy) (*domain.AccountState, error) {
+	query, args := policy.selectBestQuery()
 	row := conn.QueryRowContext(ctx, query, args...)
 	selected, err := scanAccountState(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -491,7 +411,7 @@ WHERE status = 'active'
 	return selected, nil
 }
 
-func (s *SQLiteStateStore) selectPinnedAccountTx(ctx context.Context, conn *sql.Conn, accountID string, provider string, now time.Time) (*domain.AccountState, error) {
+func (s *SQLiteStateStore) selectPinnedAccountTx(ctx context.Context, conn *sql.Conn, accountID string, policy leaseSelectionPolicy) (*domain.AccountState, error) {
 	row := conn.QueryRowContext(ctx, `
 SELECT
 	account_id,
@@ -528,36 +448,11 @@ WHERE account_id = ?
 	if err != nil {
 		return nil, err
 	}
-	if provider != "" && selected.Provider != provider {
-		return nil, domain.ErrNoEligibleAccounts
-	}
-	if !accountEligible(selected, now) {
+	if !policy.allowsPinnedAccount(selected) {
 		return nil, domain.ErrNoEligibleAccounts
 	}
 
 	return selected, nil
-}
-
-func accountEligible(selected *domain.AccountState, now time.Time) bool {
-	if selected == nil {
-		return false
-	}
-	if selected.Status != domain.AccountRoutingActive {
-		return false
-	}
-	if selected.CooldownUntil != nil && selected.CooldownUntil.After(now) {
-		return false
-	}
-	if selected.QuotaBlockedUntil != nil && selected.QuotaBlockedUntil.After(now) {
-		return false
-	}
-	if selected.DailyUsageCount >= selected.DailyLimit {
-		return false
-	}
-	if selected.ActiveLeases >= selected.MaxConcurrent {
-		return false
-	}
-	return true
 }
 
 func (s *SQLiteStateStore) GetForceModeState(ctx context.Context) (domain.ForceModeState, error) {
@@ -947,6 +842,59 @@ WHERE account_id = ?
 	committed = true
 
 	return nil
+}
+
+// ReclaimStaleLeases closes any open account_leases and zeroes the per-account
+// counters. Intended to run once at process startup: by definition no request
+// can be in-flight before the server accepts connections, so every open lease
+// is an orphan from a prior crash or non-graceful shutdown.
+func (s *SQLiteStateStore) ReclaimStaleLeases(ctx context.Context) (int64, error) {
+	now := time.Now().UTC()
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("acquire sqlite connection: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return 0, fmt.Errorf("begin reclaim stale leases transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+
+	result, err := conn.ExecContext(ctx, `
+UPDATE account_leases
+SET released_at = ?
+WHERE released_at IS NULL
+`, formatTime(now))
+	if err != nil {
+		return 0, fmt.Errorf("mark stale leases released: %w", err)
+	}
+	reclaimed, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read reclaimed leases rows affected: %w", err)
+	}
+
+	if _, err := conn.ExecContext(ctx, `
+UPDATE accounts
+SET active_leases = 0,
+    updated_at = ?
+WHERE active_leases > 0
+`, formatTime(now)); err != nil {
+		return 0, fmt.Errorf("reset stale active lease counters: %w", err)
+	}
+
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return 0, fmt.Errorf("commit reclaim stale leases transaction: %w", err)
+	}
+	committed = true
+
+	return reclaimed, nil
 }
 
 func (s *SQLiteStateStore) refreshEligibility(ctx context.Context, exec sqlExecutor, now time.Time) error {

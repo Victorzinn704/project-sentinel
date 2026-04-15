@@ -86,6 +86,85 @@ CREATE TABLE account_leases (
 	}
 }
 
+func TestReclaimStaleLeasesZeroesCountersAndClosesOpenLeases(t *testing.T) {
+	t.Parallel()
+
+	store, err := OpenSQLiteStateStore(t.TempDir() + "/state.db")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("migrate store: %v", err)
+	}
+
+	for _, id := range []string{"acc_a", "acc_b", "acc_c"} {
+		if err := store.UpsertAccountState(ctx, domain.AccountState{
+			AccountID:     id,
+			Provider:      domain.ProviderChatGPT,
+			Status:        domain.AccountRoutingActive,
+			DailyLimit:    10,
+			MaxConcurrent: 1,
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	// Acquire leases on A and B, leave them open to simulate a crash mid-request.
+	if _, _, err := store.AcquireAccountLease(ctx, "acc_a", "req_a"); err != nil {
+		t.Fatalf("acquire acc_a: %v", err)
+	}
+	if _, _, err := store.AcquireAccountLease(ctx, "acc_b", "req_b"); err != nil {
+		t.Fatalf("acquire acc_b: %v", err)
+	}
+	// Release the one on C cleanly — reclaim should not touch closed leases.
+	leaseC, _, err := store.AcquireAccountLease(ctx, "acc_c", "req_c")
+	if err != nil {
+		t.Fatalf("acquire acc_c: %v", err)
+	}
+	if err := store.ReleaseLease(ctx, *leaseC); err != nil {
+		t.Fatalf("release acc_c: %v", err)
+	}
+
+	reclaimed, err := store.ReclaimStaleLeases(ctx)
+	if err != nil {
+		t.Fatalf("reclaim: %v", err)
+	}
+	if reclaimed != 2 {
+		t.Fatalf("reclaimed = %d, want 2", reclaimed)
+	}
+
+	rows, err := store.db.QueryContext(ctx, `
+SELECT account_id, active_leases FROM accounts ORDER BY account_id
+`)
+	if err != nil {
+		t.Fatalf("query counters: %v", err)
+	}
+	defer rows.Close()
+
+	got := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[id] = n
+	}
+	for _, id := range []string{"acc_a", "acc_b", "acc_c"} {
+		if got[id] != 0 {
+			t.Fatalf("active_leases[%s] = %d, want 0", id, got[id])
+		}
+	}
+
+	// After reclaim, A should be acquirable again.
+	if _, _, err := store.AcquireAccountLease(ctx, "acc_a", "req_a2"); err != nil {
+		t.Fatalf("re-acquire acc_a after reclaim: %v", err)
+	}
+}
+
 func TestAcquireLeaseRespectsProviderAndGlobalForceMode(t *testing.T) {
 	t.Parallel()
 

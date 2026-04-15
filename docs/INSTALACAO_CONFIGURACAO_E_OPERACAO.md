@@ -66,18 +66,22 @@ Copy-Item .env.example .env
 Edite os campos obrigatorios em `.env`:
 
 - `SENTINEL_API_KEY`
+- `SENTINEL_ADMIN_API_KEY`
 - `SESSION_ENCRYPTION_KEY` (32 bytes exatos)
 - `HTTP_ADDR` (normalmente `:8080`)
-- `DEFAULT_MODEL` (normalmente `sentinel-router`)
+- `DEFAULT_MODEL` (normalmente `gpt-5.4`)
 
 Checklist minimo do `.env`:
 
 ```txt
 SENTINEL_API_KEY: preenchido com valor unico seu
+SENTINEL_ADMIN_API_KEY: diferente da runtime key
 SESSION_ENCRYPTION_KEY: 32 caracteres
 HTTP_ADDR: :8080
-DEFAULT_MODEL: sentinel-router
+DEFAULT_MODEL: gpt-5.4
 ```
+
+Voce ainda pode escolher qualquer modelo existente via request no campo `model` ou via configuracao do cliente.
 
 ### 3.3 Gerar chave de sessao de 32 bytes (opcional)
 
@@ -137,7 +141,34 @@ Revogar chave anterior:
 .\tools\sentinelctl.ps1 key-revoke
 ```
 
-## 5.2 Chave usada pelo Codex CLI (CODEX_API_KEY)
+## 5.2 Chave da API administrativa (SENTINEL_ADMIN_API_KEY)
+
+Ver chave mascarada:
+
+```powershell
+.\tools\sentinelctl.ps1 admin-key-show
+```
+
+Rotacionar chave:
+
+```powershell
+.\tools\sentinelctl.ps1 admin-key-new
+```
+
+## 5.3 Chave de sessão (SESSION_ENCRYPTION_KEY)
+
+Rotacionar a chave de sessão e recriptografar os arquivos `sessions/*.json.enc`:
+
+```powershell
+.\tools\sentinelctl.ps1 session-key-rotate
+```
+
+Rotacionar runtime key, admin key e session key de uma vez:
+
+```powershell
+.\tools\sentinelctl.ps1 secrets-rotate
+```
+## 5.4 Chave usada pelo Codex CLI (CODEX_API_KEY)
 
 Instalar provider local do Sentinel no Codex:
 
@@ -154,7 +185,7 @@ Persistir no ambiente do usuario Windows:
 Apontar para Sentinel remoto:
 
 ```powershell
-.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL http://SEU_HOST:8080/v1
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://sentinel.deskimperial.online/v1
 ```
 
 ## 6. Cadastro de contas
@@ -184,7 +215,7 @@ Use no cliente/IDE:
 ```txt
 Base URL: http://127.0.0.1:8080/v1
 API Key: <SENTINEL_API_KEY>
-Model: sentinel-router
+Model: gpt-5.4
 ```
 
 Para uso remoto, troque `127.0.0.1` pelo host da VM.
@@ -326,18 +357,38 @@ Se o guard mostrar `[BLOCK]`:
 
 ## 11. Deploy remoto (Oracle VM exemplo)
 
-Deploy tipico com Docker no servidor:
+Pré-requisitos do caminho principal:
+
+- subdomínio dedicado (ex.: `sentinel.seudominio.com`) apontado por `A record` para o IP público da VM (no Cloudflare, mantenha o registro como *DNS only* / nuvem cinza, senão o proxy intercepta o desafio HTTP-01 do Let's Encrypt)
+- portas `80` e `443` liberadas na OCI Security List/NSG **e** no firewall local da VM (`iptables`/`ufw`)
+- variáveis `SENTINEL_PUBLIC_HOST` e `LETSENCRYPT_EMAIL` preenchidas no `.env`
+- `SENTINEL_ADMIN_API_KEY` diferente da runtime key
+
+Observacao importante:
+
+- o `docker-compose.oracle.yml` assume `80/443` no host. Não suba em uma máquina que já termine TLS para outro app nessas portas
+- se quiser publicar sob um caminho (ex.: `/suporte`) no proxy de um site existente, não use este compose; configure `proxy_pass http://<vm_ip>:8080/` no nginx/Caddy principal
+
+Exemplo minimo no `.env` do servidor:
+
+```txt
+SENTINEL_PUBLIC_HOST=sentinel.seudominio.com
+LETSENCRYPT_EMAIL=ops@seudominio.com
+CODEX_BASE_URL=https://sentinel.seudominio.com/v1
+```
+
+Deploy tipico com HTTPS terminado em Caddy:
 
 ```bash
 cd /opt/project-sentinel
-docker compose -f deployments/docker-compose.yml up --build -d
+docker compose -f deployments/docker-compose.oracle.yml up --build -d
 ```
 
 Validacao pos-deploy:
 
 ```bash
 docker ps | grep sentinel
-curl -sS http://127.0.0.1:8080/healthz
+curl -sS https://sentinel.seudominio.com/healthz
 ```
 
 ## 12. Boas praticas de seguranca
@@ -345,5 +396,5 @@ curl -sS http://127.0.0.1:8080/healthz
 - nunca commitar `.env`
 - nunca commitar `sessions/*.json.enc`
 - nunca commitar `tools/auto-login/credentials.json`
-- rotacionar `SENTINEL_API_KEY` periodicamente
+- rotacionar `SENTINEL_API_KEY` e `SENTINEL_ADMIN_API_KEY` periodicamente
 - proteger `SESSION_ENCRYPTION_KEY` em cofre seguro
