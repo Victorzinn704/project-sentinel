@@ -108,7 +108,7 @@ Configure seu app/IDE/CLI assim:
 ```txt
 Base URL: http://127.0.0.1:8080/v1
 API Key: valor de SENTINEL_API_KEY no .env
-Model: sentinel-router
+Model: gpt-5.4
 ```
 
 Se o cliente roda no mesmo computador do Sentinel, use `127.0.0.1` ou `localhost`. Se o cliente roda em outro computador, container, celular, servidor cloud ou ferramenta hospedada fora da sua máquina, ele não consegue enxergar `127.0.0.1`; nesse caso rode o Sentinel em uma VPS/servidor ou exponha por um túnel seguro com HTTPS.
@@ -142,7 +142,7 @@ Isso cria ou atualiza:
 Bloco gerenciado criado:
 
 ```toml
-model = "sentinel-router"
+model = "gpt-5.4"
 model_provider = "sentinel"
 model_reasoning_effort = "medium"
 
@@ -162,7 +162,7 @@ O comando também define na sessão atual do PowerShell:
 ```txt
 CODEX_API_KEY=<mesmo valor de SENTINEL_API_KEY>
 CODEX_BASE_URL=http://127.0.0.1:8080/v1
-CODEX_MODEL=sentinel-router
+CODEX_MODEL=gpt-5.4
 ```
 
 Se quiser que outro PowerShell também enxergue a key sem rodar o comando de novo:
@@ -401,7 +401,7 @@ SESSION_STORE_PATH=./sessions
 STATE_DB_PATH=./sessions/state.db
 MODELS_CONFIG_PATH=./configs/models.json
 ROTATION_STRATEGY=quota_first
-DEFAULT_MODEL=sentinel-router
+DEFAULT_MODEL=gpt-5.4
 DEFAULT_REASONING_EFFORT=auto
 REQUEST_TIMEOUT_SECONDS=120
 SENTINEL_API_KEY=sk-sentinel-sua-key
@@ -419,7 +419,7 @@ random
 weighted_round_robin
 ```
 
-`DEFAULT_MODEL` é usado quando algum cliente manda request sem `model`. Mantenha como `sentinel-router` para cair no roteador padrão, que atualmente aponta para `gpt-5.4`.
+`DEFAULT_MODEL` é usado quando algum cliente manda request sem `model`. Use `gpt-5.4` como padrão para resposta direta e mude o campo `model` no cliente quando quiser usar qualquer outro modelo existente em `/v1/models`.
 
 ## Endpoints
 

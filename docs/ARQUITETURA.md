@@ -110,7 +110,7 @@ xhigh
 
 No modo `auto`, o adapter usa `high` em tarefas curtas e sobe para `xhigh` quando o contexto parece pesado. Abaixo de `high`, ele continua promovendo para `high`.
 
-`DEFAULT_MODEL=sentinel-router` é aplicado quando uma request OpenAI-compatible chega sem `model`. O handler injeta esse modelo no payload interno antes de chamar o adapter, então clientes mal configurados deixam de falhar com `missing_model`.
+`DEFAULT_MODEL=gpt-5.4` é aplicado quando uma request OpenAI-compatible chega sem `model`. O handler injeta esse modelo no payload interno antes de chamar o adapter, então clientes mal configurados deixam de falhar com `missing_model`. Quando o cliente envia `model`, qualquer modelo existente no registry continua disponivel.
 
 ## Estado Das Contas
 

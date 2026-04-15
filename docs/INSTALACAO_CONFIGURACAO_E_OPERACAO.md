@@ -69,7 +69,7 @@ Edite os campos obrigatorios em `.env`:
 - `SENTINEL_ADMIN_API_KEY`
 - `SESSION_ENCRYPTION_KEY` (32 bytes exatos)
 - `HTTP_ADDR` (normalmente `:8080`)
-- `DEFAULT_MODEL` (normalmente `sentinel-router`)
+- `DEFAULT_MODEL` (normalmente `gpt-5.4`)
 
 Checklist minimo do `.env`:
 
@@ -78,8 +78,10 @@ SENTINEL_API_KEY: preenchido com valor unico seu
 SENTINEL_ADMIN_API_KEY: diferente da runtime key
 SESSION_ENCRYPTION_KEY: 32 caracteres
 HTTP_ADDR: :8080
-DEFAULT_MODEL: sentinel-router
+DEFAULT_MODEL: gpt-5.4
 ```
+
+Voce ainda pode escolher qualquer modelo existente via request no campo `model` ou via configuracao do cliente.
 
 ### 3.3 Gerar chave de sessao de 32 bytes (opcional)
 
@@ -213,7 +215,7 @@ Use no cliente/IDE:
 ```txt
 Base URL: http://127.0.0.1:8080/v1
 API Key: <SENTINEL_API_KEY>
-Model: sentinel-router
+Model: gpt-5.4
 ```
 
 Para uso remoto, troque `127.0.0.1` pelo host da VM.

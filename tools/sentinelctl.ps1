@@ -5,7 +5,7 @@ param(
     [Parameter(Position = 1)]
     [string]$Value,
 
-    [string]$Model = "sentinel-router",
+    [string]$Model = "gpt-5.4",
 
     [ValidateSet("auto", "minimal", "low", "medium", "high", "xhigh")]
     [string]$Effort = "high",
@@ -133,7 +133,7 @@ function Get-DefaultModel {
     if ($envMap.ContainsKey("DEFAULT_MODEL") -and $envMap["DEFAULT_MODEL"]) {
         return $envMap["DEFAULT_MODEL"]
     }
-    return "sentinel-router"
+    return "gpt-5.4"
 }
 
 function Get-DefaultReasoningEffort {
@@ -1478,3 +1478,4 @@ switch ($Command.ToLowerInvariant()) {
         throw "Unknown command: $Command"
     }
 }
+

@@ -58,7 +58,7 @@ func Load() (Config, error) {
 		ModelsConfigPath:            env("MODELS_CONFIG_PATH", "./configs/models.json"),
 		LogLevel:                    env("LOG_LEVEL", "info"),
 		RotationStrategy:            rotationStrategy,
-		DefaultModel:                env("DEFAULT_MODEL", "sentinel-router"),
+		DefaultModel:                env("DEFAULT_MODEL", "gpt-5.4"),
 		DefaultReasoningEffort:      defaultReasoningEffort,
 		QuotaRefreshIntervalSeconds: quotaRefreshIntervalSeconds,
 		RequestTimeoutSeconds:       requestTimeoutSeconds,
