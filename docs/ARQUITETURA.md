@@ -76,6 +76,17 @@ POST /v1/v1/responses
 
 `/v1/responses` converte payload básico da Responses API para Chat Completions internamente, executa pelo mesmo scheduler/adapters e devolve formato Responses API.
 
+Superfície admin operacional:
+
+```txt
+GET  /admin/accounts
+GET  /admin/state
+POST /admin/force
+POST /admin/quota/refresh
+POST /admin/accounts/:id/disable
+POST /admin/accounts/:id/enable
+```
+
 ## Modelo E Esforço
 
 `configs/models.json` contém os modelos lógicos:
@@ -92,11 +103,12 @@ POST /v1/v1/responses
 `DEFAULT_REASONING_EFFORT` aceita:
 
 ```txt
+auto
 high
 xhigh
 ```
 
-O adapter ChatGPT promove qualquer request abaixo de `high` para `high`. Isso evita que clientes externos reduzam a qualidade sem querer.
+No modo `auto`, o adapter usa `high` em tarefas curtas e sobe para `xhigh` quando o contexto parece pesado. Abaixo de `high`, ele continua promovendo para `high`.
 
 `DEFAULT_MODEL=sentinel-router` é aplicado quando uma request OpenAI-compatible chega sem `model`. O handler injeta esse modelo no payload interno antes de chamar o adapter, então clientes mal configurados deixam de falhar com `missing_model`.
 
@@ -120,6 +132,8 @@ latency_ewma_ms     média móvel de latência
 error_count         falhas consecutivas/recentes
 active_leases       requests em andamento
 cooldown_until      fim do cooldown
+quota_source        origem do consumo (quota real ou fallback local)
+quota_blocked_until bloqueio temporário por exaustão de quota upstream
 ```
 
 ## Rotação
@@ -127,16 +141,19 @@ cooldown_until      fim do cooldown
 Estratégias:
 
 ```txt
+quota_first
 round_robin
 least_used
 random
 weighted_round_robin
 ```
 
+`quota_first` é o padrão recomendado: quando há snapshot de quota upstream, prioriza contas com maior folga de consumo.
+
 Configuração:
 
 ```env
-ROTATION_STRATEGY=round_robin
+ROTATION_STRATEGY=quota_first
 ```
 
 ## Force Mode

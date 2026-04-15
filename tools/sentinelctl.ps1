@@ -7,7 +7,7 @@ param(
 
     [string]$Model = "sentinel-router",
 
-    [ValidateSet("high", "xhigh")]
+    [ValidateSet("auto", "minimal", "low", "medium", "high", "xhigh")]
     [string]$Effort = "high",
 
     [ValidateRange(16, 64)]
@@ -15,9 +15,13 @@ param(
 
     [string]$Prompt = "Responda apenas: ok",
 
+    [string]$BaseURL,
+
     [switch]$NoRestart,
 
     [switch]$Persist,
+
+    [switch]$GlobalConfig,
 
     [switch]$Watch
 )
@@ -89,7 +93,25 @@ function Get-BaseURL {
 }
 
 function Get-OpenAICompatibleBaseURL {
-    $base = (Get-BaseURL).TrimEnd("/")
+    param([string]$OverrideBaseURL = "")
+
+    $base = ""
+    if (-not [string]::IsNullOrWhiteSpace($OverrideBaseURL)) {
+        $base = $OverrideBaseURL.Trim()
+    } else {
+        $envMap = Read-DotEnv
+        if ($envMap.ContainsKey("CODEX_BASE_URL") -and -not [string]::IsNullOrWhiteSpace($envMap["CODEX_BASE_URL"])) {
+            $base = $envMap["CODEX_BASE_URL"].Trim()
+        } else {
+            $base = (Get-BaseURL).TrimEnd("/")
+        }
+    }
+
+    if ($base -notmatch '^https?://') {
+        throw "Base URL must start with http:// or https://"
+    }
+
+    $base = $base.TrimEnd("/")
     if ($base -match '/v1$') {
         return $base
     }
@@ -106,10 +128,52 @@ function Get-DefaultModel {
 
 function Get-DefaultReasoningEffort {
     $envMap = Read-DotEnv
-    if ($envMap.ContainsKey("DEFAULT_REASONING_EFFORT") -and $envMap["DEFAULT_REASONING_EFFORT"] -in @("high", "xhigh")) {
+    if ($envMap.ContainsKey("DEFAULT_REASONING_EFFORT") -and $envMap["DEFAULT_REASONING_EFFORT"] -in @("auto", "high", "xhigh")) {
         return $envMap["DEFAULT_REASONING_EFFORT"]
     }
     return "high"
+}
+
+function Get-DefaultCodexReasoningEffort {
+    $envMap = Read-DotEnv
+    if ($envMap.ContainsKey("CODEX_REASONING_EFFORT") -and $envMap["CODEX_REASONING_EFFORT"] -in @("minimal", "low", "medium", "high", "xhigh")) {
+        return $envMap["CODEX_REASONING_EFFORT"]
+    }
+
+    $sentinelEffort = Get-DefaultReasoningEffort
+    if ($sentinelEffort -eq "auto") {
+        return "xhigh"
+    }
+    return Normalize-CodexReasoningEffort -EffortValue $sentinelEffort
+}
+
+function Normalize-CodexReasoningEffort {
+    param([string]$EffortValue)
+
+    if ([string]::IsNullOrWhiteSpace($EffortValue)) {
+        return "medium"
+    }
+
+    switch ($EffortValue.Trim().ToLowerInvariant()) {
+        "minimal" { return "minimal" }
+        "low" { return "low" }
+        "medium" { return "medium" }
+        "high" { return "high" }
+        "xhigh" { return "xhigh" }
+        "auto" { return "medium" }
+        default { return "medium" }
+    }
+}
+
+function Assert-SentinelDefaultReasoningEffort {
+    param(
+        [Parameter(Mandatory = $true)][string]$EffortValue,
+        [Parameter(Mandatory = $true)][string]$CommandName
+    )
+
+    if ($EffortValue -notin @("auto", "high", "xhigh")) {
+        throw "For '$CommandName', -Effort must be auto, high or xhigh."
+    }
 }
 
 function Get-AuthHeaders {
@@ -149,16 +213,25 @@ Sentinel control CLI
 
 Usage:
   .\tools\sentinelctl.ps1 status
+  .\tools\sentinelctl.ps1 watch
+  .\tools\sentinelctl.ps1 watch 3
+    .\tools\sentinelctl.ps1 consumo
+    .\tools\sentinelctl.ps1 consumo-watch
+    .\tools\sentinelctl.ps1 consumo-watch 5
+    .\tools\sentinelctl.ps1 consumo -BaseURL http://147.15.60.224:8080/v1
   .\tools\sentinelctl.ps1 accounts
   .\tools\sentinelctl.ps1 models
   .\tools\sentinelctl.ps1 chat -Model gpt-5.4 -Effort high -Prompt "Responda apenas: ok"
   .\tools\sentinelctl.ps1 test
+  .\tools\sentinelctl.ps1 quota-refresh
   .\tools\sentinelctl.ps1 force acc_contato_deskimperial_online
   .\tools\sentinelctl.ps1 unforce
   .\tools\sentinelctl.ps1 disable acc_suporte_deskimperial_online
   .\tools\sentinelctl.ps1 enable acc_suporte_deskimperial_online
   .\tools\sentinelctl.ps1 use-model gpt-5.4 -Effort xhigh
   .\tools\sentinelctl.ps1 codex-install
+  .\tools\sentinelctl.ps1 codex-install -BaseURL http://147.15.60.224:8080/v1
+  .\tools\sentinelctl.ps1 codex-install -GlobalConfig
   .\tools\sentinelctl.ps1 codex-install -Persist
   .\tools\sentinelctl.ps1 key-show
   .\tools\sentinelctl.ps1 key-new
@@ -168,10 +241,183 @@ Usage:
 
 Notes:
   use-model changes sentinel-router and DEFAULT_REASONING_EFFORT, then restart is required.
-  Effort is intentionally limited to high or xhigh.
-  codex-install writes ~/.codex/config.toml with a managed Sentinel provider and exports CODEX_API_KEY for this shell.
+    chat/test/codex-install accept minimal, low, medium, high or xhigh.
+    use-model and set-effort accept auto, high or xhigh.
+    consumo/consumo-watch read account usage + quota bars and prefer CODEX_BASE_URL when present.
+    Use -BaseURL to force a specific Sentinel target for consumo/consumo-watch/quota-refresh.
+  codex-install writes .codex/config.toml in this project by default; use -GlobalConfig for ~/.codex/config.toml.
+  codex-install accepts -BaseURL to point Codex at a remote Sentinel instead of the local one.
+  codex-install also honors CODEX_BASE_URL and CODEX_REASONING_EFFORT from .env when present.
   key-new and key-revoke rotate SENTINEL_API_KEY and restart by default.
+  Rotation defaults to quota_first when quota snapshots are available.
 "@
+}
+
+function Get-WatchIntervalSeconds {
+    if ($Value -and $Value -match '^\d+$') {
+        $parsed = [int]$Value
+        if ($parsed -ge 1 -and $parsed -le 60) {
+            return $parsed
+        }
+    }
+    return 2
+}
+
+function Resolve-SentinelAdminBaseURL {
+    param([string]$OverrideBaseURL = "")
+
+    $base = ""
+    if (-not [string]::IsNullOrWhiteSpace($OverrideBaseURL)) {
+        $base = $OverrideBaseURL.Trim()
+    } else {
+        $envMap = Read-DotEnv
+        if ($envMap.ContainsKey("CODEX_BASE_URL") -and -not [string]::IsNullOrWhiteSpace($envMap["CODEX_BASE_URL"])) {
+            $base = $envMap["CODEX_BASE_URL"].Trim()
+        } else {
+            $base = (Get-BaseURL).Trim()
+        }
+    }
+
+    if ($base -notmatch '^https?://') {
+        throw "Sentinel base URL must start with http:// or https://"
+    }
+
+    $base = $base.TrimEnd("/")
+    $base = [regex]::Replace($base, '/v1$', '')
+    return $base
+}
+
+function Invoke-SentinelAdmin {
+    param(
+        [Parameter(Mandatory = $true)][string]$Method,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [object]$Body = $null,
+        [int]$TimeoutSec = 30,
+        [string]$BaseURLOverride = ""
+    )
+
+    $headers = Get-AuthHeaders
+    $baseURL = Resolve-SentinelAdminBaseURL -OverrideBaseURL $BaseURLOverride
+    $uri = "$baseURL$Path"
+
+    if ($null -eq $Body) {
+        return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -TimeoutSec $TimeoutSec
+    }
+
+    $json = $Body | ConvertTo-Json -Depth 24
+    return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -Body $json -ContentType "application/json" -TimeoutSec $TimeoutSec
+}
+
+function New-UsageBar {
+    param(
+        [Nullable[int]]$Percent,
+        [int]$Width = 20
+    )
+
+    if ($null -eq $Percent) {
+        return "[" + ("-" * $Width) + "]"
+    }
+
+    $clamped = [Math]::Max(0, [Math]::Min(100, [int]$Percent))
+    $filled = [int][Math]::Round(($clamped * $Width) / 100.0)
+    if ($filled -gt $Width) {
+        $filled = $Width
+    }
+
+    return "[" + ("#" * $filled) + ("-" * ($Width - $filled)) + "]"
+}
+
+function Show-ConsumptionBars {
+    param([string]$BaseURLOverride = "")
+
+    $baseURL = Resolve-SentinelAdminBaseURL -OverrideBaseURL $BaseURLOverride
+    $state = Invoke-SentinelAdmin -Method Get -Path "/admin/state" -BaseURLOverride $baseURL
+    $accounts = Invoke-SentinelAdmin -Method Get -Path "/admin/accounts" -BaseURLOverride $baseURL
+
+    [pscustomobject]@{
+        at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        base_url = $baseURL
+        accounts = $state.account_count
+        active = $state.active_accounts
+        quota_aware = $state.quota_aware_accounts
+        quota_blocked = $state.quota_blocked_accounts
+        rotation = $state.rotation_strategy
+    } | Format-List
+
+    foreach ($acc in $accounts.accounts | Sort-Object account_id) {
+        $quotaPct = $null
+        if ($acc.PSObject.Properties["quota_bottleneck_pct"] -and $null -ne $acc.quota_bottleneck_pct) {
+            $quotaPct = [int]$acc.quota_bottleneck_pct
+        }
+
+        $source = "daily_usage"
+        if ($acc.PSObject.Properties["quota_source"] -and -not [string]::IsNullOrWhiteSpace($acc.quota_source)) {
+            $source = [string]$acc.quota_source
+        }
+
+        if ($null -eq $quotaPct -and $acc.daily_limit -gt 0) {
+            $usedPct = [int][Math]::Round(($acc.daily_usage_count * 100.0) / [double]$acc.daily_limit)
+            $quotaPct = [Math]::Max(0, 100 - $usedPct)
+        }
+
+        $fiveHourPct = $null
+        if ($acc.PSObject.Properties["five_hour_remaining_pct"] -and $null -ne $acc.five_hour_remaining_pct) {
+            $fiveHourPct = [int]$acc.five_hour_remaining_pct
+        }
+
+        $weeklyPct = $null
+        if ($acc.PSObject.Properties["weekly_remaining_pct"] -and $null -ne $acc.weekly_remaining_pct) {
+            $weeklyPct = [int]$acc.weekly_remaining_pct
+        }
+
+        $bar = New-UsageBar -Percent $quotaPct -Width 22
+        $remainingTxt = if ($null -ne $quotaPct) { "{0,3}%" -f $quotaPct } else { "n/a" }
+        $fiveHourTxt = if ($null -ne $fiveHourPct) { "{0,3}%" -f $fiveHourPct } else { "n/a" }
+        $weeklyTxt = if ($null -ne $weeklyPct) { "{0,3}%" -f $weeklyPct } else { "n/a" }
+
+        "{0,-40} {1} rem={2} 5h={3} 7d={4} daily={5,5}/{6,-5} status={7,-17} src={8}" -f `
+            $acc.account_id, `
+            $bar, `
+            $remainingTxt, `
+            $fiveHourTxt, `
+            $weeklyTxt, `
+            $acc.daily_usage_count, `
+            $acc.daily_limit, `
+            $acc.status, `
+            $source
+    }
+}
+
+function Show-SentinelWatchFrame {
+    $health = Get-HealthOrNull
+    if ($null -eq $health) {
+        throw "Sentinel is not responding at $(Get-BaseURL)"
+    }
+
+    $state = Invoke-Sentinel -Method Get -Path "/admin/state"
+    $accounts = Invoke-Sentinel -Method Get -Path "/admin/accounts"
+    $forcedAccount = ""
+    if ($state.PSObject.Properties["forced_account_id"]) {
+        $forcedAccount = $state.forced_account_id
+    }
+
+    [pscustomobject]@{
+        at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        server = $health.status
+        rotation = $state.rotation_strategy
+        force_mode = $state.force_mode_active
+        forced_account = $forcedAccount
+        accounts = $state.account_count
+        active_accounts = $state.active_accounts
+        active_leases = $state.active_leases
+        quota_aware_accounts = $state.quota_aware_accounts
+        quota_blocked_accounts = $state.quota_blocked_accounts
+    } | Format-List
+
+    $accounts.accounts |
+        Sort-Object -Property @{ Expression = { if ($null -ne $_.quota_bottleneck_pct) { [int]$_.quota_bottleneck_pct } else { -1 } } }, account_id -Descending |
+        Select-Object account_id, status, quota_bottleneck_pct, five_hour_remaining_pct, weekly_remaining_pct, active_leases, daily_usage_count, quota_blocked_until, last_used_at |
+        Format-Table -AutoSize
 }
 
 function New-SentinelAPIKey {
@@ -328,6 +574,12 @@ function Update-RouterModel {
 }
 
 function Get-CodexConfigPath {
+    param([bool]$UseGlobal = $false)
+
+    if (-not $UseGlobal) {
+        return Join-Path (Join-Path $Root ".codex") "config.toml"
+    }
+
     if ($env:CODEX_HOME) {
         return Join-Path $env:CODEX_HOME "config.toml"
     }
@@ -376,6 +628,44 @@ function Remove-TomlRootKeys {
     return (($out.ToArray()) -join "`r`n").TrimEnd()
 }
 
+function Split-TomlRootAndSections {
+    param([string]$Content)
+
+    if ([string]::IsNullOrEmpty($Content)) {
+        return @{
+            Root = ""
+            Sections = ""
+        }
+    }
+
+    $lines = $Content -split "\r?\n"
+    $firstSectionIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*\[[^\]]+\]\s*(#.*)?$') {
+            $firstSectionIndex = $i
+            break
+        }
+    }
+
+    if ($firstSectionIndex -lt 0) {
+        return @{
+            Root = $Content.TrimEnd()
+            Sections = ""
+        }
+    }
+
+    $root = ""
+    if ($firstSectionIndex -gt 0) {
+        $root = ($lines[0..($firstSectionIndex - 1)] -join "`r`n").TrimEnd()
+    }
+    $sections = ($lines[$firstSectionIndex..($lines.Count - 1)] -join "`r`n").TrimEnd()
+
+    return @{
+        Root = $root
+        Sections = $sections
+    }
+}
+
 function Remove-TomlSection {
     param(
         [string]$Content,
@@ -407,7 +697,26 @@ function Remove-TomlSection {
     return (($out.ToArray()) -join "`r`n").TrimEnd()
 }
 
-function New-CodexManagedBlock {
+function New-CodexManagedRootBlock {
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetModel,
+        [Parameter(Mandatory = $true)][string]$TargetEffort
+    )
+
+    if ($TargetModel -notmatch '^[A-Za-z0-9._:-]+$') {
+        throw "Unsafe Codex model id: $TargetModel"
+    }
+
+    @"
+# BEGIN PROJECT SENTINEL MANAGED ROOT
+model = "$TargetModel"
+model_provider = "sentinel"
+model_reasoning_effort = "$TargetEffort"
+# END PROJECT SENTINEL MANAGED ROOT
+"@.TrimEnd()
+}
+
+function New-CodexManagedProviderSection {
     param(
         [Parameter(Mandatory = $true)][string]$TargetModel,
         [Parameter(Mandatory = $true)][string]$TargetEffort,
@@ -422,17 +731,13 @@ function New-CodexManagedBlock {
     }
 
     @"
-# BEGIN PROJECT SENTINEL MANAGED
-model = "$TargetModel"
-model_provider = "sentinel"
-model_reasoning_effort = "$TargetEffort"
-
+# BEGIN PROJECT SENTINEL MANAGED PROVIDER
 [model_providers.sentinel]
 name = "Project Sentinel"
 base_url = "$BaseURL"
 wire_api = "responses"
 env_key = "CODEX_API_KEY"
-# END PROJECT SENTINEL MANAGED
+# END PROJECT SENTINEL MANAGED PROVIDER
 "@.TrimEnd()
 }
 
@@ -440,7 +745,9 @@ function Install-CodexProvider {
     param(
         [Parameter(Mandatory = $true)][string]$TargetModel,
         [Parameter(Mandatory = $true)][string]$TargetEffort,
-        [bool]$PersistEnv = $false
+        [bool]$PersistEnv = $false,
+        [bool]$UseGlobalConfig = $false,
+        [string]$TargetBaseURL = ""
     )
 
     $modelsPath = Join-Path $Root "configs\models.json"
@@ -455,8 +762,8 @@ function Install-CodexProvider {
         throw "SENTINEL_API_KEY is empty. Run '.\tools\sentinelctl.ps1 key-new' first."
     }
 
-    $baseURL = Get-OpenAICompatibleBaseURL
-    $configPath = Get-CodexConfigPath
+    $baseURL = Get-OpenAICompatibleBaseURL -OverrideBaseURL $TargetBaseURL
+    $configPath = Get-CodexConfigPath -UseGlobal $UseGlobalConfig
     $configDir = Split-Path -Parent $configPath
     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
 
@@ -471,15 +778,32 @@ function Install-CodexProvider {
     }
 
     $clean = Remove-TomlManagedBlock -Content $existing
-    $clean = Remove-TomlRootKeys -Content $clean -Keys @("model", "model_provider", "model_reasoning_effort")
-    $clean = Remove-TomlSection -Content $clean -Section "model_providers.sentinel"
-    $block = New-CodexManagedBlock -TargetModel $TargetModel -TargetEffort $TargetEffort -BaseURL $baseURL
+    $clean = [regex]::Replace(
+        $clean,
+        "(?ms)^\s*# BEGIN PROJECT SENTINEL MANAGED ROOT\r?\n.*?^\s*# END PROJECT SENTINEL MANAGED ROOT\r?\n?",
+        ""
+    )
+    $clean = [regex]::Replace(
+        $clean,
+        "(?ms)^\s*# BEGIN PROJECT SENTINEL MANAGED PROVIDER\r?\n.*?^\s*# END PROJECT SENTINEL MANAGED PROVIDER\r?\n?",
+        ""
+    )
+    $parts = Split-TomlRootAndSections -Content $clean
+    $root = Remove-TomlRootKeys -Content $parts.Root -Keys @("model", "model_provider", "model_reasoning_effort")
+    $sections = Remove-TomlSection -Content $parts.Sections -Section "model_providers.sentinel"
+    $rootBlock = New-CodexManagedRootBlock -TargetModel $TargetModel -TargetEffort $TargetEffort
+    $providerBlock = New-CodexManagedProviderSection -TargetModel $TargetModel -TargetEffort $TargetEffort -BaseURL $baseURL
 
-    if ([string]::IsNullOrWhiteSpace($clean)) {
-        $nextContent = "$block`r`n"
-    } else {
-        $nextContent = "$($clean.TrimEnd())`r`n`r`n$block`r`n"
+    $segments = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($root)) {
+        [void]$segments.Add($root.TrimEnd())
     }
+    [void]$segments.Add($rootBlock)
+    if (-not [string]::IsNullOrWhiteSpace($sections)) {
+        [void]$segments.Add($sections.TrimEnd())
+    }
+    [void]$segments.Add($providerBlock)
+    $nextContent = (($segments.ToArray()) -join "`r`n`r`n").TrimEnd() + "`r`n"
     Set-Content -LiteralPath $configPath -Value $nextContent
 
     $env:CODEX_API_KEY = $apiKey
@@ -488,13 +812,12 @@ function Install-CodexProvider {
 
     if ($PersistEnv) {
         [System.Environment]::SetEnvironmentVariable("CODEX_API_KEY", $apiKey, "User")
-        [System.Environment]::SetEnvironmentVariable("CODEX_BASE_URL", $baseURL, "User")
-        [System.Environment]::SetEnvironmentVariable("CODEX_MODEL", $TargetModel, "User")
     }
 
     [pscustomobject]@{
         codex_config = $configPath
         backup = if ($backupPath) { $backupPath } else { "<none>" }
+        config_scope = if ($UseGlobalConfig) { "global" } else { "project" }
         provider = "sentinel"
         base_url = $baseURL
         model = $TargetModel
@@ -555,11 +878,13 @@ switch ($Command.ToLowerInvariant()) {
             forced_account = $forcedAccount
             accounts = $state.account_count
             active_accounts = $state.active_accounts
+            quota_aware_accounts = $state.quota_aware_accounts
+            quota_blocked_accounts = $state.quota_blocked_accounts
             active_leases = $state.active_leases
         } | Format-List
 
         $accounts.accounts |
-            Select-Object account_id, provider, status, daily_usage_count, daily_limit, error_count, latency_ewma_ms, active_leases |
+            Select-Object account_id, provider, status, quota_bottleneck_pct, quota_blocked_until, daily_usage_count, daily_limit, error_count, latency_ewma_ms, active_leases |
             Format-Table -AutoSize
         break
     }
@@ -572,9 +897,27 @@ switch ($Command.ToLowerInvariant()) {
     "accounts" {
         $accounts = Invoke-Sentinel -Method Get -Path "/admin/accounts"
         $accounts.accounts |
-            Select-Object account_id, provider, status, daily_usage_count, daily_limit, error_count, latency_ewma_ms, active_leases, cooldown_until |
+            Select-Object account_id, provider, status, quota_source, quota_refreshed_at, quota_bottleneck_pct, five_hour_remaining_pct, weekly_remaining_pct, quota_blocked_until, daily_usage_count, active_leases, cooldown_until |
             Format-Table -AutoSize
         break
+    }
+
+    "consumo" {
+        Show-ConsumptionBars -BaseURLOverride $BaseURL
+        break
+    }
+
+    "consumo-watch" {
+        $intervalSec = Get-WatchIntervalSeconds
+        while ($true) {
+            Clear-Host
+            try {
+                Show-ConsumptionBars -BaseURLOverride $BaseURL
+            } catch {
+                Write-Host $_.Exception.Message
+            }
+            Start-Sleep -Seconds $intervalSec
+        }
     }
 
     "models" {
@@ -611,6 +954,11 @@ switch ($Command.ToLowerInvariant()) {
         break
     }
 
+    "quota-refresh" {
+        Invoke-SentinelAdmin -Method Post -Path "/admin/quota/refresh" -BaseURLOverride $BaseURL | ConvertTo-Json -Depth 8
+        break
+    }
+
     "force" {
         if (-not $Value) { throw "Usage: .\tools\sentinelctl.ps1 force <account_id>" }
         Invoke-Sentinel -Method Post -Path "/admin/force" -Body @{ account_id = $Value } | ConvertTo-Json -Depth 8
@@ -639,6 +987,7 @@ switch ($Command.ToLowerInvariant()) {
         if (-not $target) {
             $target = $Model
         }
+        Assert-SentinelDefaultReasoningEffort -EffortValue $Effort -CommandName "use-model"
         Update-RouterModel -TargetModel $target -TargetEffort $Effort
         break
     }
@@ -654,13 +1003,15 @@ switch ($Command.ToLowerInvariant()) {
         }
         $targetEffort = $Effort
         if (-not $PSBoundParameters.ContainsKey("Effort")) {
-            $targetEffort = Get-DefaultReasoningEffort
+            $targetEffort = Get-DefaultCodexReasoningEffort
         }
-        Install-CodexProvider -TargetModel $target -TargetEffort $targetEffort -PersistEnv $Persist
+        $targetEffort = Normalize-CodexReasoningEffort -EffortValue $targetEffort
+        Install-CodexProvider -TargetModel $target -TargetEffort $targetEffort -PersistEnv $Persist -UseGlobalConfig $GlobalConfig -TargetBaseURL $BaseURL
         break
     }
 
     "set-effort" {
+        Assert-SentinelDefaultReasoningEffort -EffortValue $Effort -CommandName "set-effort"
         Set-DotEnvValue -Key "DEFAULT_REASONING_EFFORT" -NewValue $Effort
         "DEFAULT_REASONING_EFFORT=$Effort"
         "Run '.\tools\sentinelctl.ps1 restart' to reload config."
@@ -697,6 +1048,19 @@ switch ($Command.ToLowerInvariant()) {
             Get-Content -Path $logPath -Tail 80
         }
         break
+    }
+
+    "watch" {
+        $intervalSec = Get-WatchIntervalSeconds
+        while ($true) {
+            Clear-Host
+            try {
+                Show-SentinelWatchFrame
+            } catch {
+                Write-Host $_.Exception.Message
+            }
+            Start-Sleep -Seconds $intervalSec
+        }
     }
 
     default {

@@ -17,6 +17,7 @@ dist/
 coverage.out
 .tools/
 .claude/
+.codex/
 
 *.db
 *.db-shm

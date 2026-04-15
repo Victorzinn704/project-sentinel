@@ -4,6 +4,22 @@ Gateway local OpenAI-compatible para usar contas ChatGPT/Codex com rotação, co
 
 O Sentinel fica entre seu app/IDE e o upstream ChatGPT. Você aponta o cliente para `http://127.0.0.1:8080/v1`, usa a `SENTINEL_API_KEY`, escolhe `sentinel-router` ou `gpt-5.4`, e o projeto cuida de resolver modelo, escolher conta, criar lease, chamar o provider e registrar consumo.
 
+## Comece Aqui (Para Publicar No GitHub)
+
+Se você quer deixar o projeto pronto para onboarding de time e publicação, siga nesta ordem:
+
+1. [Instalação, Configuração e Operação](docs/INSTALACAO_CONFIGURACAO_E_OPERACAO.md)
+2. [Operação no PowerShell](docs/OPERACAO_POWERSHELL.md)
+3. [Guia de Treinamento (Train The Trainer)](docs/GUIA_TREINAMENTO.md)
+4. [Checklist de Publicação no GitHub](docs/CHECKLIST_PUBLICACAO_GITHUB.md)
+5. [Arquitetura](docs/ARQUITETURA.md)
+
+Antes de qualquer `git push`, rode:
+
+```powershell
+.\tools\publication_guard.ps1
+```
+
 ## Stack
 
 <table>
@@ -19,7 +35,7 @@ O Sentinel fica entre seu app/IDE e o upstream ChatGPT. Você aponta o cliente p
   </tr>
   <tr>
     <td><b>Admin API</b><br>Contas, estado global, disable/enable e force mode.</td>
-    <td><b>Rotation</b><br>Round-robin, least-used, random e weighted round-robin.</td>
+    <td><b>Rotation</b><br>quota_first, round-robin, least-used, random e weighted round-robin.</td>
     <td><b>GPT-5.4</b><br>Modelo padrão com esforço mínimo <code>high</code>.</td>
   </tr>
 </table>
@@ -28,7 +44,7 @@ O Sentinel fica entre seu app/IDE e o upstream ChatGPT. Você aponta o cliente p
 
 - Expõe uma API local compatível com OpenAI para IDEs, CLIs e ferramentas que aceitam `base_url`.
 - Roteia `sentinel-router` para `gpt-5.4` por padrão.
-- Força `reasoning_effort` mínimo `high`; você pode subir para `xhigh`.
+- Força `reasoning_effort` mínimo `high`; no modo `auto`, sobe para `xhigh` só em tarefas mais pesadas.
 - Rotaciona contas ChatGPT/Codex ativas.
 - Registra consumo diário por conta.
 - Marca contas com falha de autenticação como `attention_required`.
@@ -109,7 +125,7 @@ codex-latest   -> gpt-5.4
 
 O jeito mais limpo é deixar o Codex enxergar só um provider local chamado `sentinel`. A chave real não fica gravada no `config.toml`; o arquivo aponta para `env_key = "CODEX_API_KEY"` e o `sentinelctl` exporta essa variável.
 
-Instalar/atualizar o provider do Codex:
+Instalar/atualizar o provider do Codex neste projeto:
 
 ```powershell
 .\tools\sentinelctl.ps1 codex-install
@@ -118,7 +134,7 @@ Instalar/atualizar o provider do Codex:
 Isso cria ou atualiza:
 
 ```txt
-%USERPROFILE%\.codex\config.toml
+.\.codex\config.toml
 ```
 
 Bloco gerenciado criado:
@@ -126,7 +142,7 @@ Bloco gerenciado criado:
 ```toml
 model = "sentinel-router"
 model_provider = "sentinel"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "medium"
 
 [model_providers.sentinel]
 name = "Project Sentinel"
@@ -135,7 +151,9 @@ wire_api = "responses"
 env_key = "CODEX_API_KEY"
 ```
 
-O comando usa `DEFAULT_MODEL` e `DEFAULT_REASONING_EFFORT` do `.env` quando você não passa `-Model` ou `-Effort`. No seu setup atual, isso fica `sentinel-router` com `xhigh`.
+Valores aceitos pelo Codex para `model_reasoning_effort`: `minimal`, `low`, `medium`, `high`, `xhigh`.
+
+O comando usa `DEFAULT_MODEL` do `.env` quando você não passa `-Model`. Para effort no Codex, se `DEFAULT_REASONING_EFFORT=auto`, o `sentinelctl` converte para `medium` para manter o `config.toml` válido.
 
 O comando também define na sessão atual do PowerShell:
 
@@ -151,7 +169,21 @@ Se quiser que outro PowerShell também enxergue a key sem rodar o comando de nov
 .\tools\sentinelctl.ps1 codex-install -Persist
 ```
 
-Use `-Persist` com critério: ele grava `CODEX_API_KEY` no ambiente de usuário do Windows. É prático, mas continua sendo segredo local.
+Use `-Persist` com critério: ele grava só `CODEX_API_KEY` no ambiente de usuário do Windows. É prático, mas continua sendo segredo local.
+
+Se você realmente quiser mexer no Codex global da máquina:
+
+```powershell
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig
+```
+
+Se quiser apontar o Codex para um Sentinel remoto:
+
+```powershell
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL http://147.15.60.224:8080/v1
+```
+
+Como o config padrão agora é local ao projeto, abra o `codex` a partir desta pasta para ele enxergar `.\.codex\config.toml`.
 
 ## Teste Rápido
 
@@ -175,6 +207,8 @@ ok
 
 Para menor latência, use `-Effort high`. `xhigh` tende a demorar mais porque o upstream pensa mais antes de emitir texto. O Sentinel envia um chunk inicial no streaming para o cliente não ficar sem evento enquanto o upstream prepara a resposta.
 
+Se quiser reduzir custo médio sem perder qualidade em tarefas complexas, use `-Effort auto`. Nesse modo, o adapter mantém o piso em `high` e sobe para `xhigh` quando o contexto parece pesado.
+
 ## Monitoramento
 
 Ver visão geral:
@@ -183,10 +217,42 @@ Ver visão geral:
 .\tools\sentinelctl.ps1 status
 ```
 
+Refresh manual da quota real:
+
+```powershell
+.\tools\sentinelctl.ps1 quota-refresh
+```
+
 Ver consumo por conta:
 
 ```powershell
 .\tools\sentinelctl.ps1 accounts
+```
+
+Painel de consumo em barra (snapshot):
+
+```powershell
+.\tools\sentinelctl.ps1 consumo
+```
+
+Painel de consumo em barra (contínuo):
+
+```powershell
+.\tools\sentinelctl.ps1 consumo-watch 5
+```
+
+Quando disponível, a barra usa quota real da conta (`chatgpt_wham_usage`). Se alguma conta estiver sem autenticação válida, ela entra em fallback local por request diária (`daily_usage`).
+
+Painel contínuo no terminal:
+
+```powershell
+.\tools\sentinelctl.ps1 watch
+```
+
+Com intervalo customizado:
+
+```powershell
+.\tools\sentinelctl.ps1 watch 3
 ```
 
 Ver modelos carregados:
@@ -217,6 +283,13 @@ Usar GPT-5.4 com esforço altíssimo:
 .\tools\sentinelctl.ps1 restart
 ```
 
+Usar GPT-5.4 com esforço adaptativo:
+
+```powershell
+.\tools\sentinelctl.ps1 use-model gpt-5.4 -Effort auto
+.\tools\sentinelctl.ps1 restart
+```
+
 Alterar só o esforço padrão:
 
 ```powershell
@@ -224,7 +297,7 @@ Alterar só o esforço padrão:
 .\tools\sentinelctl.ps1 restart
 ```
 
-O adapter promove qualquer request abaixo de `high` para `high`. Se quiser máximo, mande `xhigh`.
+O adapter promove qualquer request abaixo de `high` para `high`. Se quiser equilíbrio, use `auto`. Se quiser máximo, mande `xhigh`.
 
 ## Gerenciar API Key Local
 
@@ -306,9 +379,9 @@ HTTP_ADDR=:8080
 SESSION_STORE_PATH=./sessions
 STATE_DB_PATH=./sessions/state.db
 MODELS_CONFIG_PATH=./configs/models.json
-ROTATION_STRATEGY=round_robin
+ROTATION_STRATEGY=quota_first
 DEFAULT_MODEL=sentinel-router
-DEFAULT_REASONING_EFFORT=high
+DEFAULT_REASONING_EFFORT=auto
 REQUEST_TIMEOUT_SECONDS=120
 SENTINEL_API_KEY=sk-sentinel-sua-key
 SESSION_ENCRYPTION_KEY=32-bytes-exatos-aqui
@@ -317,6 +390,7 @@ SESSION_ENCRYPTION_KEY=32-bytes-exatos-aqui
 Estratégias de rotação aceitas:
 
 ```txt
+quota_first
 round_robin
 least_used
 random
@@ -354,6 +428,7 @@ Admin:
 GET  /admin/accounts
 GET  /admin/state
 POST /admin/force
+POST /admin/quota/refresh
 POST /admin/accounts/:id/disable
 POST /admin/accounts/:id/enable
 ```
@@ -391,6 +466,9 @@ $env:GOCACHE = Join-Path (Get-Location) ".tools\gocache"
 
 ## Documentação Adicional
 
+- [Instalação, Configuração e Operação](docs/INSTALACAO_CONFIGURACAO_E_OPERACAO.md)
+- [Guia de Treinamento (Train The Trainer)](docs/GUIA_TREINAMENTO.md)
+- [Checklist de Publicação no GitHub](docs/CHECKLIST_PUBLICACAO_GITHUB.md)
 - [Operação no PowerShell](docs/OPERACAO_POWERSHELL.md)
 - [Arquitetura](docs/ARQUITETURA.md)
 

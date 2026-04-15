@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/seu-usuario/project-sentinel/internal/domain"
 	_ "modernc.org/sqlite"
@@ -205,4 +206,115 @@ func TestSetAccountRoutingStatusClearsForceModeForDisabledAccount(t *testing.T) 
 	if forceState.Active {
 		t.Fatalf("force mode should be cleared after disabling account, got %+v", forceState)
 	}
+}
+
+func TestAcquireLeasePrefersQuotaSnapshotWhenQuotaFirst(t *testing.T) {
+	t.Parallel()
+
+	store, err := OpenSQLiteStateStore(t.TempDir() + "/state.db")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("migrate store: %v", err)
+	}
+	store.SetRotationStrategy(domain.RotationQuotaFirst)
+
+	now := time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC)
+	if err := store.UpsertAccountState(ctx, domain.AccountState{
+		AccountID:            "acc_low",
+		Provider:             domain.ProviderChatGPT,
+		Status:               domain.AccountRoutingActive,
+		DailyLimit:           10,
+		MaxConcurrent:        1,
+		QuotaSource:          "chatgpt_wham_usage",
+		QuotaRefreshedAt:     &now,
+		FiveHourRemainingPct: intPtr(12),
+		WeeklyRemainingPct:   intPtr(60),
+	}); err != nil {
+		t.Fatalf("upsert low quota account: %v", err)
+	}
+	if err := store.UpsertAccountState(ctx, domain.AccountState{
+		AccountID:            "acc_high",
+		Provider:             domain.ProviderChatGPT,
+		Status:               domain.AccountRoutingActive,
+		DailyLimit:           10,
+		MaxConcurrent:        1,
+		QuotaSource:          "chatgpt_wham_usage",
+		QuotaRefreshedAt:     &now,
+		FiveHourRemainingPct: intPtr(80),
+		WeeklyRemainingPct:   intPtr(70),
+	}); err != nil {
+		t.Fatalf("upsert high quota account: %v", err)
+	}
+
+	lease, selected, err := store.AcquireBestAccountLease(ctx, "req_quota_first")
+	if err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	if selected.AccountID != "acc_high" {
+		t.Fatalf("selected account = %q, want acc_high", selected.AccountID)
+	}
+	if err := store.ReleaseLease(ctx, *lease); err != nil {
+		t.Fatalf("release lease: %v", err)
+	}
+}
+
+func TestAcquireLeaseSkipsQuotaBlockedAccount(t *testing.T) {
+	t.Parallel()
+
+	store, err := OpenSQLiteStateStore(t.TempDir() + "/state.db")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("migrate store: %v", err)
+	}
+	store.SetRotationStrategy(domain.RotationQuotaFirst)
+
+	blockedUntil := time.Now().UTC().Add(30 * time.Minute)
+	if err := store.UpsertAccountState(ctx, domain.AccountState{
+		AccountID:            "acc_blocked",
+		Provider:             domain.ProviderChatGPT,
+		Status:               domain.AccountRoutingActive,
+		DailyLimit:           10,
+		MaxConcurrent:        1,
+		QuotaBlockedUntil:    &blockedUntil,
+		FiveHourRemainingPct: intPtr(0),
+		WeeklyRemainingPct:   intPtr(0),
+	}); err != nil {
+		t.Fatalf("upsert blocked account: %v", err)
+	}
+	if err := store.UpsertAccountState(ctx, domain.AccountState{
+		AccountID:            "acc_open",
+		Provider:             domain.ProviderChatGPT,
+		Status:               domain.AccountRoutingActive,
+		DailyLimit:           10,
+		MaxConcurrent:        1,
+		FiveHourRemainingPct: intPtr(40),
+		WeeklyRemainingPct:   intPtr(40),
+	}); err != nil {
+		t.Fatalf("upsert open account: %v", err)
+	}
+
+	lease, selected, err := store.AcquireBestAccountLease(ctx, "req_skip_blocked")
+	if err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	if selected.AccountID != "acc_open" {
+		t.Fatalf("selected account = %q, want acc_open", selected.AccountID)
+	}
+	if err := store.ReleaseLease(ctx, *lease); err != nil {
+		t.Fatalf("release lease: %v", err)
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
 }

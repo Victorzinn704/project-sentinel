@@ -7,8 +7,9 @@ import "time"
 // decide cooldown behavior (RetryAfter is the upstream-signaled retry
 // window, zero when not provided).
 type ProviderResult struct {
-	RequestID  string
-	ResourceID string
-	StatusCode int
-	RetryAfter time.Duration
+	RequestID     string
+	ResourceID    string
+	StatusCode    int
+	RetryAfter    time.Duration
+	QuotaSnapshot *AccountQuotaSnapshot
 }

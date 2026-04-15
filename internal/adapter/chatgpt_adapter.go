@@ -137,7 +137,7 @@ func (a *ChatGPTAdapter) Execute(
 		return nil, fmt.Errorf("%w: upstream model is required", domain.ErrInvalidData)
 	}
 
-	backendPayload, err := buildCodexPayload(messages, upstreamModel, a.effectiveReasoningEffort(reasoningEffort))
+	backendPayload, err := buildCodexPayload(messages, upstreamModel, a.effectiveReasoningEffort(reasoningEffort, messages))
 	if err != nil {
 		return nil, fmt.Errorf("%w: build codex payload: %v", domain.ErrInvalidData, err)
 	}
@@ -183,27 +183,38 @@ func (a *ChatGPTAdapter) Execute(
 		StatusCode: resp.StatusCode,
 	}
 
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if readErr != nil {
+			return result, fmt.Errorf("%w: read upstream error body: %v", domain.ErrTransientUpstream, readErr)
+		}
+		result.QuotaSnapshot = extractRuntimeQuotaSnapshotFromPayload(raw, time.Now().UTC())
+
+		switch {
+		case resp.StatusCode == 429:
+			result.RetryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
+			if result.RetryAfter <= 0 {
+				result.RetryAfter = parseCodexRetryAfter(bytes.NewReader(raw))
+			}
+			return result, domain.ErrPolicyRateLimit
+		case resp.StatusCode == 401 || resp.StatusCode == 403:
+			return result, domain.ErrAuthFailure
+		case resp.StatusCode >= 500 && resp.StatusCode <= 599:
+			return result, fmt.Errorf("%w: upstream returned status %d", domain.ErrTransientUpstream, resp.StatusCode)
+		default:
+			return result, fmt.Errorf("%w: upstream returned status %d: %s", domain.ErrInvalidData, resp.StatusCode, readUpstreamErrorSnippet(bytes.NewReader(raw)))
+		}
+	}
+
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
 		// Success — fall through to stream translation.
-	case resp.StatusCode == 429:
-		result.RetryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
-		if result.RetryAfter <= 0 {
-			result.RetryAfter = parseCodexRetryAfter(resp.Body)
-		}
-		return result, domain.ErrPolicyRateLimit
-	case resp.StatusCode == 401 || resp.StatusCode == 403:
-		return result, domain.ErrAuthFailure
-	case resp.StatusCode >= 500 && resp.StatusCode <= 599:
-		return result, fmt.Errorf("%w: upstream returned status %d", domain.ErrTransientUpstream, resp.StatusCode)
-	default:
-		return result, fmt.Errorf("%w: upstream returned status %d: %s", domain.ErrInvalidData, resp.StatusCode, readUpstreamErrorSnippet(resp.Body))
 	}
 
 	if stream {
-		err = translateSSEStream(ctx, resp.Body, requestID, model.ID, streamWriter)
+		result.QuotaSnapshot, err = translateSSEStream(ctx, resp.Body, requestID, model.ID, streamWriter)
 	} else {
-		err = translateNonStreamingResponse(resp.Body, requestID, model.ID, streamWriter)
+		result.QuotaSnapshot, err = translateNonStreamingResponse(resp.Body, requestID, model.ID, streamWriter)
 	}
 
 	if err != nil {
@@ -244,14 +255,12 @@ func parseOpenAIRequest(rawBody []byte) (string, bool, []json.RawMessage, string
 }
 
 type codexPayload struct {
-	Model             string         `json:"model"`
-	Stream            bool           `json:"stream"`
-	Store             bool           `json:"store"`
-	Instructions      string         `json:"instructions"`
-	Input             []codexInput   `json:"input"`
-	Reasoning         codexReasoning `json:"reasoning"`
-	ParallelToolCalls bool           `json:"parallel_tool_calls"`
-	Include           []string       `json:"include,omitempty"`
+	Model        string         `json:"model"`
+	Stream       bool           `json:"stream"`
+	Store        bool           `json:"store"`
+	Instructions string         `json:"instructions"`
+	Input        []codexInput   `json:"input"`
+	Reasoning    codexReasoning `json:"reasoning"`
 }
 
 type codexInput struct {
@@ -290,13 +299,13 @@ func buildCodexPayload(openAIMessages []json.RawMessage, upstreamModel string, r
 		partType := "input_text"
 		switch msg.Role {
 		case "system", "developer":
-			role = "developer"
 			if text != "" {
 				if instructions != "" {
 					instructions += "\n"
 				}
 				instructions += text
 			}
+			continue
 		case "assistant":
 			role = "assistant"
 			partType = "output_text"
@@ -312,14 +321,12 @@ func buildCodexPayload(openAIMessages []json.RawMessage, upstreamModel string, r
 	}
 
 	return &codexPayload{
-		Model:             upstreamModel,
-		Stream:            true,
-		Store:             false,
-		Instructions:      instructions,
-		Input:             inputs,
-		Reasoning:         codexReasoning{Effort: reasoningEffort, Summary: "auto"},
-		ParallelToolCalls: true,
-		Include:           []string{"reasoning.encrypted_content"},
+		Model:        upstreamModel,
+		Stream:       true,
+		Store:        false,
+		Instructions: instructions,
+		Input:        inputs,
+		Reasoning:    codexReasoning{Effort: reasoningEffort, Summary: "auto"},
 	}, nil
 }
 
@@ -334,6 +341,8 @@ func normalizeReasoningEffort(value string) string {
 
 func normalizeDefaultReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "auto":
+		return "auto"
 	case "xhigh":
 		return "xhigh"
 	default:
@@ -341,15 +350,79 @@ func normalizeDefaultReasoningEffort(value string) string {
 	}
 }
 
-func (a *ChatGPTAdapter) effectiveReasoningEffort(requested string) string {
+func (a *ChatGPTAdapter) effectiveReasoningEffort(requested string, messages []json.RawMessage) string {
 	requested = normalizeReasoningEffort(requested)
-	if a.defaultReasoningEffort == "xhigh" {
+	switch a.defaultReasoningEffort {
+	case "xhigh":
 		return "xhigh"
+	case "auto":
+		if requested == "xhigh" || requested == "high" {
+			return requested
+		}
+		return inferAdaptiveReasoningEffort(messages)
 	}
 	if requested == "xhigh" {
 		return "xhigh"
 	}
 	return "high"
+}
+
+func inferAdaptiveReasoningEffort(messages []json.RawMessage) string {
+	if len(messages) >= 6 {
+		return "xhigh"
+	}
+
+	totalChars := 0
+	longMessages := 0
+	structuredComplexity := 0
+
+	for _, raw := range messages {
+		var msg struct {
+			Role    string `json:"role"`
+			Content any    `json:"content"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			continue
+		}
+
+		text := strings.TrimSpace(extractTextContent(msg.Content))
+		totalChars += len(text)
+		if len(text) >= 1200 {
+			longMessages++
+		}
+
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "```") {
+			structuredComplexity += 2
+		}
+		if strings.Contains(lower, "stack trace") ||
+			strings.Contains(lower, "traceback") ||
+			strings.Contains(lower, "refactor") ||
+			strings.Contains(lower, "root cause") ||
+			strings.Contains(lower, "arquitet") ||
+			strings.Contains(lower, "investig") ||
+			strings.Contains(lower, "debug") ||
+			strings.Contains(lower, "analis") ||
+			strings.Contains(lower, "patch") {
+			structuredComplexity++
+		}
+		if msg.Role == "system" || msg.Role == "developer" {
+			structuredComplexity++
+		}
+	}
+
+	switch {
+	case totalChars >= 3000:
+		return "xhigh"
+	case totalChars >= 1800 && structuredComplexity >= 2:
+		return "xhigh"
+	case longMessages >= 2:
+		return "xhigh"
+	case structuredComplexity >= 4:
+		return "xhigh"
+	default:
+		return "high"
+	}
 }
 
 // extractTextContent handles OpenAI content fields that can be either a plain
@@ -396,16 +469,17 @@ func translateSSEStream(
 	requestID string,
 	model string,
 	write func([]byte) error,
-) error {
+) (*domain.AccountQuotaSnapshot, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 512*1024)
 
 	completionID := "chatcmpl-" + requestID
+	var quotaSnapshot *domain.AccountQuotaSnapshot
 
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return quotaSnapshot, ctx.Err()
 		default:
 		}
 
@@ -419,9 +493,13 @@ func translateSSEStream(
 
 		if data == "[DONE]" {
 			if err := write([]byte("data: [DONE]\n\n")); err != nil {
-				return err
+				return quotaSnapshot, err
 			}
-			return nil
+			return quotaSnapshot, nil
+		}
+
+		if snapshot := extractRuntimeQuotaSnapshotFromPayload([]byte(data), time.Now().UTC()); snapshot != nil {
+			quotaSnapshot = snapshot
 		}
 
 		var event codexSSEData
@@ -434,7 +512,7 @@ func translateSSEStream(
 
 		switch event.Type {
 		case "response.output_text.delta":
-			delta = event.Delta
+			delta = sanitizeInternalTraceText(event.Delta)
 		case "response.completed":
 			finishReason = "stop"
 		default:
@@ -453,19 +531,19 @@ func translateSSEStream(
 
 		sseEvent := fmt.Sprintf("data: %s\n\n", chunkBytes)
 		if err := write([]byte(sseEvent)); err != nil {
-			return err
+			return quotaSnapshot, err
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read upstream SSE stream: %w", err)
+		return quotaSnapshot, fmt.Errorf("read upstream SSE stream: %w", err)
 	}
 
 	if err := write([]byte("data: [DONE]\n\n")); err != nil {
-		return err
+		return quotaSnapshot, err
 	}
 
-	return nil
+	return quotaSnapshot, nil
 }
 
 func translateNonStreamingResponse(
@@ -473,18 +551,22 @@ func translateNonStreamingResponse(
 	requestID string,
 	model string,
 	write func([]byte) error,
-) error {
+) (*domain.AccountQuotaSnapshot, error) {
 	raw, err := io.ReadAll(body)
 	if err != nil {
-		return fmt.Errorf("read upstream response: %w", err)
+		return nil, fmt.Errorf("read upstream response: %w", err)
 	}
+	now := time.Now().UTC()
+	quotaSnapshot := extractRuntimeQuotaSnapshotFromPayload(raw, now)
 
 	if bytes.Contains(raw, []byte("data:")) {
+		quotaSnapshot = extractRuntimeQuotaSnapshotFromSSE(raw, now)
 		content, ok := extractCompletedCodexText(raw)
 		if !ok {
-			return fmt.Errorf("stream closed before response.completed")
+			return quotaSnapshot, fmt.Errorf("stream closed before response.completed")
 		}
-		return writeOpenAITextResponse(requestID, model, content, write)
+		content = sanitizeInternalTraceText(content)
+		return quotaSnapshot, writeOpenAITextResponse(requestID, model, content, write)
 	}
 
 	type compactContent struct {
@@ -507,7 +589,7 @@ func translateNonStreamingResponse(
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		// Upstream returned a non-JSON body (HTML challenge, plain error, etc.).
 		// Surfacing it as assistant content masks failures; report transient.
-		return fmt.Errorf("decode upstream compact response: %w", err)
+		return quotaSnapshot, fmt.Errorf("decode upstream compact response: %w", err)
 	}
 
 	var fullContent string
@@ -520,6 +602,7 @@ func translateNonStreamingResponse(
 			}
 		}
 	}
+	fullContent = sanitizeInternalTraceText(fullContent)
 
 	completionID := "chatcmpl-" + requestID
 	response := map[string]any{
@@ -546,10 +629,10 @@ func translateNonStreamingResponse(
 
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
-		return fmt.Errorf("encode response: %w", err)
+		return quotaSnapshot, fmt.Errorf("encode response: %w", err)
 	}
 
-	return write(responseBytes)
+	return quotaSnapshot, write(responseBytes)
 }
 
 type codexCompletedEvent struct {
@@ -593,12 +676,12 @@ func extractCompletedCodexText(raw []byte) (string, bool) {
 
 		switch event.Type {
 		case "response.output_text.delta":
-			deltas.WriteString(event.Delta)
+			deltas.WriteString(sanitizeInternalTraceText(event.Delta))
 		case "response.completed":
 			if text := extractCodexResponseText(event.Response); text != "" {
-				return text, true
+				return sanitizeInternalTraceText(text), true
 			}
-			return deltas.String(), true
+			return sanitizeInternalTraceText(deltas.String()), true
 		}
 	}
 

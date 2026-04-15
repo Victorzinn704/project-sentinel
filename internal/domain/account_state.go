@@ -24,22 +24,39 @@ const (
 )
 
 type AccountState struct {
-	AccountID       string
-	Provider        string
-	Status          AccountRoutingStatus
-	LastUsedAt      *time.Time
-	DailyUsageCount int
-	DailyLimit      int
-	UsageDate       string
-	CooldownUntil   *time.Time
-	LatencyEWMAMs   float64
-	ErrorCount      int
-	PlanPriority    int
-	ActiveLeases    int
-	MaxConcurrent   int
-	RetryAfterUntil *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	AccountID            string
+	Provider             string
+	Status               AccountRoutingStatus
+	LastUsedAt           *time.Time
+	DailyUsageCount      int
+	DailyLimit           int
+	UsageDate            string
+	CooldownUntil        *time.Time
+	LatencyEWMAMs        float64
+	ErrorCount           int
+	PlanPriority         int
+	ActiveLeases         int
+	MaxConcurrent        int
+	RetryAfterUntil      *time.Time
+	QuotaSource          string
+	QuotaRefreshedAt     *time.Time
+	QuotaBlockedUntil    *time.Time
+	FiveHourRemainingPct *int
+	FiveHourResetAt      *time.Time
+	WeeklyRemainingPct   *int
+	WeeklyResetAt        *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+type AccountQuotaSnapshot struct {
+	Source               string
+	RefreshedAt          time.Time
+	BlockedUntil         *time.Time
+	FiveHourRemainingPct *int
+	FiveHourResetAt      *time.Time
+	WeeklyRemainingPct   *int
+	WeeklyResetAt        *time.Time
 }
 
 type AccountStateManager interface {
@@ -49,5 +66,6 @@ type AccountStateManager interface {
 	RecordRateLimit(ctx context.Context, accountID string, retryAfterSeconds int) error
 	RecordAuthFailure(ctx context.Context, accountID string) error
 	RecordTransientFailure(ctx context.Context, accountID string) error
+	RecordQuotaSnapshot(ctx context.Context, accountID string, snapshot AccountQuotaSnapshot) error
 	ReleaseLease(ctx context.Context, lease Lease) error
 }

@@ -243,6 +243,7 @@ func handleStreaming(
 		return
 	}
 
+	recordQuotaSnapshot(r.Context(), releaser, accountID, result)
 	_ = releaser.RecordSuccess(r.Context(), accountID, latencyMs)
 
 	if logger != nil {
@@ -281,6 +282,7 @@ func handleNonStreaming(
 		return
 	}
 
+	recordQuotaSnapshot(r.Context(), releaser, accountID, result)
 	_ = releaser.RecordSuccess(r.Context(), accountID, latencyMs)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -305,6 +307,7 @@ func handleNonStreaming(
 // The upstream-declared Retry-After is honored when present; otherwise we fall
 // back to a conservative 1h cooldown.
 func recordOutcome(ctx context.Context, releaser LeaseReleaser, accountID string, err error, result *domain.ProviderResult) {
+	recordQuotaSnapshot(ctx, releaser, accountID, result)
 	switch {
 	case errors.Is(err, domain.ErrPolicyRateLimit):
 		retryAfter := defaultRateLimitCooldown
@@ -317,6 +320,13 @@ func recordOutcome(ctx context.Context, releaser LeaseReleaser, accountID string
 	default:
 		_ = releaser.RecordTransientFailure(ctx, accountID)
 	}
+}
+
+func recordQuotaSnapshot(ctx context.Context, releaser LeaseReleaser, accountID string, result *domain.ProviderResult) {
+	if result == nil || result.QuotaSnapshot == nil {
+		return
+	}
+	_ = releaser.RecordQuotaSnapshot(ctx, accountID, *result.QuotaSnapshot)
 }
 
 // ============================================================================

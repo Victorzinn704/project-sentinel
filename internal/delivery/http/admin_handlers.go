@@ -33,22 +33,34 @@ type ForceModeManager interface {
 	ClearForceMode(ctx context.Context) error
 }
 
+type QuotaRefreshRunner interface {
+	RefreshAll(ctx context.Context) error
+}
+
 // AdminAccountDTO is a JSON-safe projection of domain.AccountState.
 type AdminAccountDTO struct {
-	AccountID       string  `json:"account_id"`
-	Provider        string  `json:"provider"`
-	Status          string  `json:"status"`
-	LastUsedAt      *string `json:"last_used_at,omitempty"`
-	DailyUsageCount int     `json:"daily_usage_count"`
-	DailyLimit      int     `json:"daily_limit"`
-	UsageDate       string  `json:"usage_date"`
-	CooldownUntil   *string `json:"cooldown_until,omitempty"`
-	LatencyEWMAMs   float64 `json:"latency_ewma_ms"`
-	ErrorCount      int     `json:"error_count"`
-	PlanPriority    int     `json:"plan_priority"`
-	ActiveLeases    int     `json:"active_leases"`
-	MaxConcurrent   int     `json:"max_concurrent"`
-	RetryAfterUntil *string `json:"retry_after_until,omitempty"`
+	AccountID            string  `json:"account_id"`
+	Provider             string  `json:"provider"`
+	Status               string  `json:"status"`
+	LastUsedAt           *string `json:"last_used_at,omitempty"`
+	DailyUsageCount      int     `json:"daily_usage_count"`
+	DailyLimit           int     `json:"daily_limit"`
+	UsageDate            string  `json:"usage_date"`
+	CooldownUntil        *string `json:"cooldown_until,omitempty"`
+	LatencyEWMAMs        float64 `json:"latency_ewma_ms"`
+	ErrorCount           int     `json:"error_count"`
+	PlanPriority         int     `json:"plan_priority"`
+	ActiveLeases         int     `json:"active_leases"`
+	MaxConcurrent        int     `json:"max_concurrent"`
+	RetryAfterUntil      *string `json:"retry_after_until,omitempty"`
+	QuotaSource          string  `json:"quota_source,omitempty"`
+	QuotaRefreshedAt     *string `json:"quota_refreshed_at,omitempty"`
+	QuotaBlockedUntil    *string `json:"quota_blocked_until,omitempty"`
+	QuotaBottleneckPct   *int    `json:"quota_bottleneck_pct,omitempty"`
+	FiveHourRemainingPct *int    `json:"five_hour_remaining_pct,omitempty"`
+	FiveHourResetAt      *string `json:"five_hour_reset_at,omitempty"`
+	WeeklyRemainingPct   *int    `json:"weekly_remaining_pct,omitempty"`
+	WeeklyResetAt        *string `json:"weekly_reset_at,omitempty"`
 }
 
 type AdminAccountsResponse struct {
@@ -57,15 +69,17 @@ type AdminAccountsResponse struct {
 }
 
 type AdminStateResponse struct {
-	RotationStrategy string  `json:"rotation_strategy"`
-	ForceModeActive  bool    `json:"force_mode_active"`
-	ForcedAccountID  string  `json:"forced_account_id,omitempty"`
-	ForceUpdatedAt   *string `json:"force_updated_at,omitempty"`
-	AccountCount     int     `json:"account_count"`
-	ActiveAccounts   int     `json:"active_accounts"`
-	CooldownAccounts int     `json:"cooldown_accounts"`
-	DisabledAccounts int     `json:"disabled_accounts"`
-	ActiveLeases     int     `json:"active_leases"`
+	RotationStrategy     string  `json:"rotation_strategy"`
+	ForceModeActive      bool    `json:"force_mode_active"`
+	ForcedAccountID      string  `json:"forced_account_id,omitempty"`
+	ForceUpdatedAt       *string `json:"force_updated_at,omitempty"`
+	AccountCount         int     `json:"account_count"`
+	ActiveAccounts       int     `json:"active_accounts"`
+	CooldownAccounts     int     `json:"cooldown_accounts"`
+	DisabledAccounts     int     `json:"disabled_accounts"`
+	ActiveLeases         int     `json:"active_leases"`
+	QuotaAwareAccounts   int     `json:"quota_aware_accounts"`
+	QuotaBlockedAccounts int     `json:"quota_blocked_accounts"`
 }
 
 type AdminForceRequest struct {
@@ -77,6 +91,15 @@ type AdminForceResponse struct {
 	Active    bool    `json:"active"`
 	AccountID string  `json:"account_id,omitempty"`
 	UpdatedAt *string `json:"updated_at,omitempty"`
+}
+
+type AdminQuotaRefreshResponse struct {
+	Success              bool    `json:"success"`
+	Message              string  `json:"message"`
+	RefreshedAt          *string `json:"refreshed_at,omitempty"`
+	AccountCount         int     `json:"account_count"`
+	QuotaAwareAccounts   int     `json:"quota_aware_accounts"`
+	QuotaBlockedAccounts int     `json:"quota_blocked_accounts"`
 }
 
 // GetAdminAccountsHandler returns a snapshot of every account's routing state.
@@ -130,6 +153,12 @@ func GetAdminStateHandler(lister AccountLister, inspector RotationInspector, for
 		}
 		for _, state := range states {
 			response.ActiveLeases += state.ActiveLeases
+			if state.QuotaRefreshedAt != nil {
+				response.QuotaAwareAccounts++
+			}
+			if state.QuotaBlockedUntil != nil {
+				response.QuotaBlockedAccounts++
+			}
 			switch state.Status {
 			case domain.AccountRoutingActive:
 				response.ActiveAccounts++
@@ -204,6 +233,53 @@ func PostAdminForceModeHandler(manager ForceModeManager, logger HandlerLogger) h
 	}
 }
 
+func PostAdminQuotaRefreshHandler(refresher QuotaRefreshRunner, lister AccountLister, logger HandlerLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if refresher == nil {
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "quota refresher is not configured"})
+			return
+		}
+
+		if err := refresher.RefreshAll(r.Context()); err != nil {
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+			return
+		}
+
+		response := AdminQuotaRefreshResponse{
+			Success:     true,
+			Message:     "quota refresh completed",
+			RefreshedAt: formatOptionalTime(ptrTime(time.Now().UTC())),
+		}
+		if lister != nil {
+			states, err := lister.ListAccountStates(r.Context())
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+				return
+			}
+			response.AccountCount = len(states)
+			for _, state := range states {
+				if state.QuotaRefreshedAt != nil {
+					response.QuotaAwareAccounts++
+				}
+				if state.QuotaBlockedUntil != nil {
+					response.QuotaBlockedAccounts++
+				}
+			}
+		}
+
+		if logger != nil {
+			logger.Info(
+				"account quota refresh requested manually",
+				zap.Int("account_count", response.AccountCount),
+				zap.Int("quota_aware_accounts", response.QuotaAwareAccounts),
+				zap.Int("quota_blocked_accounts", response.QuotaBlockedAccounts),
+			)
+		}
+
+		writeJSON(w, http.StatusOK, response)
+	}
+}
+
 // PostAdminAccountStatusHandler handles both enable and disable operations.
 // The target status is bound at route-registration time so the path-param
 // matcher can point both /enable and /disable here.
@@ -242,20 +318,41 @@ func PostAdminAccountStatusHandler(setter AccountStatusSetter, status domain.Acc
 
 func toAdminAccountDTO(state domain.AccountState) AdminAccountDTO {
 	return AdminAccountDTO{
-		AccountID:       state.AccountID,
-		Provider:        state.Provider,
-		Status:          string(state.Status),
-		LastUsedAt:      formatOptionalTime(state.LastUsedAt),
-		DailyUsageCount: state.DailyUsageCount,
-		DailyLimit:      state.DailyLimit,
-		UsageDate:       state.UsageDate,
-		CooldownUntil:   formatOptionalTime(state.CooldownUntil),
-		LatencyEWMAMs:   state.LatencyEWMAMs,
-		ErrorCount:      state.ErrorCount,
-		PlanPriority:    state.PlanPriority,
-		ActiveLeases:    state.ActiveLeases,
-		MaxConcurrent:   state.MaxConcurrent,
-		RetryAfterUntil: formatOptionalTime(state.RetryAfterUntil),
+		AccountID:            state.AccountID,
+		Provider:             state.Provider,
+		Status:               string(state.Status),
+		LastUsedAt:           formatOptionalTime(state.LastUsedAt),
+		DailyUsageCount:      state.DailyUsageCount,
+		DailyLimit:           state.DailyLimit,
+		UsageDate:            state.UsageDate,
+		CooldownUntil:        formatOptionalTime(state.CooldownUntil),
+		LatencyEWMAMs:        state.LatencyEWMAMs,
+		ErrorCount:           state.ErrorCount,
+		PlanPriority:         state.PlanPriority,
+		ActiveLeases:         state.ActiveLeases,
+		MaxConcurrent:        state.MaxConcurrent,
+		RetryAfterUntil:      formatOptionalTime(state.RetryAfterUntil),
+		QuotaSource:          state.QuotaSource,
+		QuotaRefreshedAt:     formatOptionalTime(state.QuotaRefreshedAt),
+		QuotaBlockedUntil:    formatOptionalTime(state.QuotaBlockedUntil),
+		QuotaBottleneckPct:   quotaBottleneckPct(state),
+		FiveHourRemainingPct: state.FiveHourRemainingPct,
+		FiveHourResetAt:      formatOptionalTime(state.FiveHourResetAt),
+		WeeklyRemainingPct:   state.WeeklyRemainingPct,
+		WeeklyResetAt:        formatOptionalTime(state.WeeklyResetAt),
+	}
+}
+
+func quotaBottleneckPct(state domain.AccountState) *int {
+	switch {
+	case state.FiveHourRemainingPct == nil:
+		return state.WeeklyRemainingPct
+	case state.WeeklyRemainingPct == nil:
+		return state.FiveHourRemainingPct
+	case *state.FiveHourRemainingPct < *state.WeeklyRemainingPct:
+		return state.FiveHourRemainingPct
+	default:
+		return state.WeeklyRemainingPct
 	}
 }
 
@@ -266,4 +363,8 @@ func formatOptionalTime(value *time.Time) *string {
 
 	formatted := value.UTC().Format(time.RFC3339Nano)
 	return &formatted
+}
+
+func ptrTime(value time.Time) *time.Time {
+	return &value
 }

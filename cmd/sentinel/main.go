@@ -96,8 +96,16 @@ func run() error {
 		zap.String("rotation_strategy", string(cfg.RotationStrategy)),
 		zap.String("default_model", cfg.DefaultModel),
 		zap.String("default_reasoning_effort", cfg.DefaultReasoningEffort),
+		zap.Int("quota_refresh_interval_seconds", cfg.QuotaRefreshIntervalSeconds),
 		zap.String("upstream", "multi-provider"),
 	)
+
+	quotaRefresher := usecase.NewAccountQuotaRefresher(sessionStore, stateStore, chatGPTAdapter, appLogger)
+	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), time.Duration(cfg.RequestTimeoutSeconds)*time.Second)
+	if err := quotaRefresher.RefreshAll(refreshCtx); err != nil {
+		appLogger.Warn("initial account quota refresh failed", zap.String("error", err.Error()))
+	}
+	refreshCancel()
 
 	router := httpdelivery.NewRouter(httpdelivery.RouterDeps{
 		AccountRegistrar:    accountService,
@@ -111,6 +119,7 @@ func run() error {
 		AccountStatusSetter: stateStore,
 		RotationInspector:   stateStore,
 		ForceModeManager:    stateStore,
+		QuotaRefresher:      quotaRefresher,
 		Logger:              appLogger,
 		APIKey:              cfg.APIKey,
 		DefaultModel:        cfg.DefaultModel,
@@ -136,6 +145,10 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.QuotaRefreshIntervalSeconds > 0 {
+		go quotaRefresher.Run(ctx, time.Duration(cfg.QuotaRefreshIntervalSeconds)*time.Second)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

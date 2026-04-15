@@ -1,0 +1,9 @@
+.git
+.tools
+.claude
+.sentinel.pid
+sentinel.out.log
+sentinel.err.log
+sessions
+.env
+.env.*

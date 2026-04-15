@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -71,5 +72,39 @@ func TestInjectSessionCredentialsDoesNotLeakLocalHeaders(t *testing.T) {
 		if got := req.Header.Get(leaked); got != "" {
 			t.Fatalf("%s leaked as %q", leaked, got)
 		}
+	}
+}
+
+func TestAdaptiveReasoningEffortKeepsSimpleTasksHigh(t *testing.T) {
+	messages := []json.RawMessage{
+		json.RawMessage(`{"role":"user","content":"Responda apenas ok."}`),
+	}
+
+	if got := inferAdaptiveReasoningEffort(messages); got != "high" {
+		t.Fatalf("inferAdaptiveReasoningEffort(simple) = %q, want high", got)
+	}
+}
+
+func TestAdaptiveReasoningEffortPromotesComplexTasksToXHigh(t *testing.T) {
+	messages := []json.RawMessage{
+		json.RawMessage(`{"role":"system","content":"Analise a arquitetura e encontre o root cause."}`),
+		json.RawMessage("{\"role\":\"user\",\"content\":\"```go\\npanic: something bad happened\\nstack trace...\\n```\\nPreciso de investigacao, debug e patch completo com plano de refactor.\"}"),
+		json.RawMessage(`{"role":"assistant","content":"Entendido."}`),
+		json.RawMessage(`{"role":"user","content":"Tambem compare as abordagens e escreva a solucao final detalhada."}`),
+	}
+
+	if got := inferAdaptiveReasoningEffort(messages); got != "xhigh" {
+		t.Fatalf("inferAdaptiveReasoningEffort(complex) = %q, want xhigh", got)
+	}
+}
+
+func TestEffectiveReasoningEffortAutoHonorsExplicitOverride(t *testing.T) {
+	adapter := &ChatGPTAdapter{defaultReasoningEffort: "auto"}
+	messages := []json.RawMessage{
+		json.RawMessage(`{"role":"user","content":"Responda apenas ok."}`),
+	}
+
+	if got := adapter.effectiveReasoningEffort("xhigh", messages); got != "xhigh" {
+		t.Fatalf("effectiveReasoningEffort(explicit) = %q, want xhigh", got)
 	}
 }

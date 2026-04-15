@@ -253,6 +253,7 @@ func chatCompletionToResponsesBody(raw []byte, fallbackModel string) ([]byte, er
 	if len(chat.Choices) > 0 {
 		content = textFromAny(chat.Choices[0].Message.Content)
 	}
+	content = sanitizeInternalTraceText(content)
 	responseID := responseIDFromChatID(chat.ID)
 	messageID := "msg_" + strings.TrimPrefix(responseID, "resp_")
 
@@ -317,6 +318,31 @@ func writeResponsesSSEFromChatSSE(w io.Writer, raw []byte, fallbackModel string)
 	}); err != nil {
 		return err
 	}
+	if err := writeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"output_index": 0,
+		"item": map[string]any{
+			"id":      messageID,
+			"type":    "message",
+			"status":  "in_progress",
+			"role":    "assistant",
+			"content": []any{},
+		},
+	}); err != nil {
+		return err
+	}
+	if err := writeEvent(map[string]any{
+		"type":          "response.content_part.added",
+		"item_id":       messageID,
+		"output_index":  0,
+		"content_index": 0,
+		"part": map[string]any{
+			"type": "output_text",
+			"text": "",
+		},
+	}); err != nil {
+		return err
+	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 64*1024), 512*1024)
@@ -355,14 +381,15 @@ func writeResponsesSSEFromChatSSE(w io.Writer, raw []byte, fallbackModel string)
 			created = chunk.Created
 		}
 		for _, choice := range chunk.Choices {
-			if choice.Delta.Content != "" {
-				fullText.WriteString(choice.Delta.Content)
+			delta := sanitizeInternalTraceText(choice.Delta.Content)
+			if delta != "" {
+				fullText.WriteString(delta)
 				if err := writeEvent(map[string]any{
 					"type":          "response.output_text.delta",
 					"item_id":       messageID,
 					"output_index":  0,
 					"content_index": 0,
-					"delta":         choice.Delta.Content,
+					"delta":         delta,
 				}); err != nil {
 					return err
 				}
@@ -373,13 +400,43 @@ func writeResponsesSSEFromChatSSE(w io.Writer, raw []byte, fallbackModel string)
 		return err
 	}
 
-	text := fullText.String()
+	text := sanitizeInternalTraceText(fullText.String())
 	if err := writeEvent(map[string]any{
 		"type":          "response.output_text.done",
 		"item_id":       messageID,
 		"output_index":  0,
 		"content_index": 0,
 		"text":          text,
+	}); err != nil {
+		return err
+	}
+	if err := writeEvent(map[string]any{
+		"type":          "response.content_part.done",
+		"item_id":       messageID,
+		"output_index":  0,
+		"content_index": 0,
+		"part": map[string]any{
+			"type": "output_text",
+			"text": text,
+		},
+	}); err != nil {
+		return err
+	}
+	if err := writeEvent(map[string]any{
+		"type":         "response.output_item.done",
+		"output_index": 0,
+		"item": map[string]any{
+			"id":     messageID,
+			"type":   "message",
+			"status": "completed",
+			"role":   "assistant",
+			"content": []map[string]any{
+				{
+					"type": "output_text",
+					"text": text,
+				},
+			},
+		},
 	}); err != nil {
 		return err
 	}
@@ -423,6 +480,8 @@ type responsesStreamBridge struct {
 	created    int64
 	started    bool
 	failed     bool
+	itemStarted bool
+	partStarted bool
 	statusCode int
 	fullText   strings.Builder
 }
@@ -492,6 +551,7 @@ func (b *responsesStreamBridge) start() {
 			"output":     []any{},
 		},
 	})
+	_ = b.ensureOutputItemStarted()
 	b.Flush()
 }
 
@@ -500,13 +560,40 @@ func (b *responsesStreamBridge) finish() {
 		b.start()
 	}
 	if !b.failed {
-		text := b.fullText.String()
+		text := sanitizeInternalTraceText(b.fullText.String())
+		_ = b.ensureOutputItemStarted()
 		_ = b.writeEvent(map[string]any{
 			"type":          "response.output_text.done",
 			"item_id":       b.messageID,
 			"output_index":  0,
 			"content_index": 0,
 			"text":          text,
+		})
+		_ = b.writeEvent(map[string]any{
+			"type":          "response.content_part.done",
+			"item_id":       b.messageID,
+			"output_index":  0,
+			"content_index": 0,
+			"part": map[string]any{
+				"type": "output_text",
+				"text": text,
+			},
+		})
+		_ = b.writeEvent(map[string]any{
+			"type":         "response.output_item.done",
+			"output_index": 0,
+			"item": map[string]any{
+				"id":     b.messageID,
+				"type":   "message",
+				"status": "completed",
+				"role":   "assistant",
+				"content": []map[string]any{
+					{
+						"type": "output_text",
+						"text": text,
+					},
+				},
+			},
 		})
 		_ = b.writeEvent(map[string]any{
 			"type": "response.completed",
@@ -569,16 +656,20 @@ func (b *responsesStreamBridge) writeChatSSEAsResponses(raw []byte) error {
 			b.created = chunk.Created
 		}
 		for _, choice := range chunk.Choices {
-			if choice.Delta.Content == "" {
+			delta := sanitizeInternalTraceText(choice.Delta.Content)
+			if delta == "" {
 				continue
 			}
-			b.fullText.WriteString(choice.Delta.Content)
+			if err := b.ensureOutputItemStarted(); err != nil {
+				return err
+			}
+			b.fullText.WriteString(delta)
 			if err := b.writeEvent(map[string]any{
 				"type":          "response.output_text.delta",
 				"item_id":       b.messageID,
 				"output_index":  0,
 				"content_index": 0,
-				"delta":         choice.Delta.Content,
+				"delta":         delta,
 			}); err != nil {
 				return err
 			}
@@ -588,6 +679,41 @@ func (b *responsesStreamBridge) writeChatSSEAsResponses(raw []byte) error {
 		return err
 	}
 	b.Flush()
+	return nil
+}
+
+func (b *responsesStreamBridge) ensureOutputItemStarted() error {
+	if !b.itemStarted {
+		if err := b.writeEvent(map[string]any{
+			"type":         "response.output_item.added",
+			"output_index": 0,
+			"item": map[string]any{
+				"id":      b.messageID,
+				"type":    "message",
+				"status":  "in_progress",
+				"role":    "assistant",
+				"content": []any{},
+			},
+		}); err != nil {
+			return err
+		}
+		b.itemStarted = true
+	}
+	if !b.partStarted {
+		if err := b.writeEvent(map[string]any{
+			"type":          "response.content_part.added",
+			"item_id":       b.messageID,
+			"output_index":  0,
+			"content_index": 0,
+			"part": map[string]any{
+				"type": "output_text",
+				"text": "",
+			},
+		}); err != nil {
+			return err
+		}
+		b.partStarted = true
+	}
 	return nil
 }
 

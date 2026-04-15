@@ -9,6 +9,11 @@ import (
 type RotationStrategy string
 
 const (
+	// RotationQuotaFirst prefers the account with the largest remaining
+	// upstream quota headroom (5h/7d windows) when snapshots are available.
+	// Falls back to local tie-breakers when quota data is missing.
+	RotationQuotaFirst RotationStrategy = "quota_first"
+
 	// RotationLeastUsed prefers accounts with the lowest daily usage count,
 	// then oldest last_used_at, then lowest EWMA latency. Best default for
 	// spreading load evenly against daily quotas.
@@ -32,7 +37,9 @@ const (
 func ParseRotationStrategy(raw string) (RotationStrategy, error) {
 	normalized := strings.ToLower(strings.TrimSpace(raw))
 	switch normalized {
-	case "", string(RotationLeastUsed):
+	case "", string(RotationQuotaFirst), "quota-first", "quotafirst":
+		return RotationQuotaFirst, nil
+	case string(RotationLeastUsed), "least-used", "leastused":
 		return RotationLeastUsed, nil
 	case string(RotationRoundRobin), "round-robin", "roundrobin":
 		return RotationRoundRobin, nil

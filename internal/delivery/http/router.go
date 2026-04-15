@@ -21,6 +21,7 @@ type RouterDeps struct {
 	AccountStatusSetter AccountStatusSetter
 	RotationInspector   RotationInspector
 	ForceModeManager    ForceModeManager
+	QuotaRefresher      QuotaRefreshRunner
 	Logger              HandlerLogger
 	APIKey              string
 	DefaultModel        string
@@ -79,6 +80,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 	}
 	if deps.ForceModeManager != nil {
 		mux.HandleFunc("/admin/force", method(http.MethodPost, auth(deps.APIKey, PostAdminForceModeHandler(deps.ForceModeManager, deps.Logger))))
+	}
+	if deps.QuotaRefresher != nil {
+		mux.HandleFunc("/admin/quota/refresh", method(http.MethodPost, auth(deps.APIKey, PostAdminQuotaRefreshHandler(deps.QuotaRefresher, deps.AccountLister, deps.Logger))))
 	}
 
 	return mux

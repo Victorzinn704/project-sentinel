@@ -11,19 +11,20 @@ import (
 )
 
 type Config struct {
-	AppEnv                 string
-	HTTPAddr               string
-	SessionStorePath       string
-	StateDBPath            string
-	ModelsConfigPath       string
-	LogLevel               string
-	RotationStrategy       domain.RotationStrategy
-	DefaultModel           string
-	DefaultReasoningEffort string
-	RequestTimeoutSeconds  int
-	MaxAttempts            int
-	SessionEncryptionKey   string
-	APIKey                 string
+	AppEnv                      string
+	HTTPAddr                    string
+	SessionStorePath            string
+	StateDBPath                 string
+	ModelsConfigPath            string
+	LogLevel                    string
+	RotationStrategy            domain.RotationStrategy
+	DefaultModel                string
+	DefaultReasoningEffort      string
+	QuotaRefreshIntervalSeconds int
+	RequestTimeoutSeconds       int
+	MaxAttempts                 int
+	SessionEncryptionKey        string
+	APIKey                      string
 }
 
 func Load() (Config, error) {
@@ -39,25 +40,30 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	rotationStrategy, err := domain.ParseRotationStrategy(env("ROTATION_STRATEGY", string(domain.RotationRoundRobin)))
+	quotaRefreshIntervalSeconds, err := envInt("QUOTA_REFRESH_INTERVAL_SECONDS", 300)
+	if err != nil {
+		return Config{}, err
+	}
+	rotationStrategy, err := domain.ParseRotationStrategy(env("ROTATION_STRATEGY", string(domain.RotationQuotaFirst)))
 	if err != nil {
 		return Config{}, fmt.Errorf("config validation failed: %w", err)
 	}
 	defaultReasoningEffort := env("DEFAULT_REASONING_EFFORT", "high")
 	cfg := Config{
-		AppEnv:                 env("APP_ENV", "development"),
-		HTTPAddr:               env("HTTP_ADDR", ":8080"),
-		SessionStorePath:       env("SESSION_STORE_PATH", "./sessions"),
-		StateDBPath:            env("STATE_DB_PATH", "./sessions/state.db"),
-		ModelsConfigPath:       env("MODELS_CONFIG_PATH", "./configs/models.json"),
-		LogLevel:               env("LOG_LEVEL", "info"),
-		RotationStrategy:       rotationStrategy,
-		DefaultModel:           env("DEFAULT_MODEL", "sentinel-router"),
-		DefaultReasoningEffort: defaultReasoningEffort,
-		RequestTimeoutSeconds:  requestTimeoutSeconds,
-		MaxAttempts:            maxAttempts,
-		SessionEncryptionKey:   os.Getenv("SESSION_ENCRYPTION_KEY"),
-		APIKey:                 os.Getenv("SENTINEL_API_KEY"),
+		AppEnv:                      env("APP_ENV", "development"),
+		HTTPAddr:                    env("HTTP_ADDR", ":8080"),
+		SessionStorePath:            env("SESSION_STORE_PATH", "./sessions"),
+		StateDBPath:                 env("STATE_DB_PATH", "./sessions/state.db"),
+		ModelsConfigPath:            env("MODELS_CONFIG_PATH", "./configs/models.json"),
+		LogLevel:                    env("LOG_LEVEL", "info"),
+		RotationStrategy:            rotationStrategy,
+		DefaultModel:                env("DEFAULT_MODEL", "sentinel-router"),
+		DefaultReasoningEffort:      defaultReasoningEffort,
+		QuotaRefreshIntervalSeconds: quotaRefreshIntervalSeconds,
+		RequestTimeoutSeconds:       requestTimeoutSeconds,
+		MaxAttempts:                 maxAttempts,
+		SessionEncryptionKey:        os.Getenv("SESSION_ENCRYPTION_KEY"),
+		APIKey:                      os.Getenv("SENTINEL_API_KEY"),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -100,6 +106,9 @@ func (c Config) Validate() error {
 	if c.MaxAttempts < 1 || c.MaxAttempts > 5 {
 		return fmt.Errorf("config validation failed: MAX_ATTEMPTS must be between 1 and 5")
 	}
+	if c.QuotaRefreshIntervalSeconds < 0 {
+		return fmt.Errorf("config validation failed: QUOTA_REFRESH_INTERVAL_SECONDS must be zero or greater")
+	}
 	if _, err := domain.ParseRotationStrategy(string(c.RotationStrategy)); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
 	}
@@ -107,9 +116,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config validation failed: DEFAULT_MODEL is required")
 	}
 	switch c.DefaultReasoningEffort {
-	case "high", "xhigh":
+	case "auto", "high", "xhigh":
 	default:
-		return fmt.Errorf("config validation failed: DEFAULT_REASONING_EFFORT must be high or xhigh")
+		return fmt.Errorf("config validation failed: DEFAULT_REASONING_EFFORT must be auto, high or xhigh")
 	}
 
 	return nil

@@ -50,7 +50,7 @@ func OpenSQLiteStateStore(path string) (*SQLiteStateStore, error) {
 		db:               db,
 		leaseTTL:         defaultLeaseTTL,
 		defaultCooldown:  defaultCooldown,
-		rotationStrategy: domain.RotationLeastUsed,
+		rotationStrategy: domain.RotationQuotaFirst,
 	}, nil
 }
 
@@ -80,6 +80,13 @@ func (s *SQLiteStateStore) Migrate(ctx context.Context) error {
 		{"accounts", "usage_date", "TEXT NOT NULL DEFAULT '1970-01-01'"},
 		{"accounts", "created_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"},
 		{"accounts", "updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"},
+		{"accounts", "quota_source", "TEXT NOT NULL DEFAULT ''"},
+		{"accounts", "quota_refreshed_at", "TEXT"},
+		{"accounts", "quota_blocked_until", "TEXT"},
+		{"accounts", "five_hour_remaining_pct", "INTEGER"},
+		{"accounts", "five_hour_reset_at", "TEXT"},
+		{"accounts", "weekly_remaining_pct", "INTEGER"},
+		{"accounts", "weekly_reset_at", "TEXT"},
 		{"account_leases", "expires_at", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'"},
 		{"account_leases", "created_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"},
 		{"account_leases", "acquired_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"},
@@ -97,7 +104,17 @@ ON account_leases (account_id, released_at, expires_at);
 	}
 	if _, err := s.db.ExecContext(ctx, `
 CREATE INDEX IF NOT EXISTS idx_accounts_provider_routing
-ON accounts (provider, status, daily_usage_count, last_used_at, latency_ewma_ms, plan_priority);
+ON accounts (
+	provider,
+	status,
+	quota_blocked_until,
+	five_hour_remaining_pct,
+	weekly_remaining_pct,
+	daily_usage_count,
+	last_used_at,
+	latency_ewma_ms,
+	plan_priority
+);
 `); err != nil {
 		return fmt.Errorf("create provider routing index: %w", err)
 	}
@@ -183,14 +200,28 @@ INSERT INTO accounts (
 	active_leases,
 	max_concurrent,
 	retry_after_until,
+	quota_source,
+	quota_refreshed_at,
+	quota_blocked_until,
+	five_hour_remaining_pct,
+	five_hour_reset_at,
+	weekly_remaining_pct,
+	weekly_reset_at,
 	created_at,
 	updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account_id) DO UPDATE SET
 	provider = excluded.provider,
 	daily_limit = excluded.daily_limit,
 	plan_priority = excluded.plan_priority,
 	max_concurrent = excluded.max_concurrent,
+	quota_source = excluded.quota_source,
+	quota_refreshed_at = excluded.quota_refreshed_at,
+	quota_blocked_until = excluded.quota_blocked_until,
+	five_hour_remaining_pct = excluded.five_hour_remaining_pct,
+	five_hour_reset_at = excluded.five_hour_reset_at,
+	weekly_remaining_pct = excluded.weekly_remaining_pct,
+	weekly_reset_at = excluded.weekly_reset_at,
 	updated_at = excluded.updated_at
 `,
 		state.AccountID,
@@ -207,6 +238,13 @@ ON CONFLICT(account_id) DO UPDATE SET
 		state.ActiveLeases,
 		state.MaxConcurrent,
 		formatNullableTime(state.RetryAfterUntil),
+		state.QuotaSource,
+		formatNullableTime(state.QuotaRefreshedAt),
+		formatNullableTime(state.QuotaBlockedUntil),
+		nullableInt(state.FiveHourRemainingPct),
+		formatNullableTime(state.FiveHourResetAt),
+		nullableInt(state.WeeklyRemainingPct),
+		formatNullableTime(state.WeeklyResetAt),
 		formatTime(now),
 		formatTime(now),
 	)
@@ -234,6 +272,13 @@ SELECT
 	active_leases,
 	max_concurrent,
 	retry_after_until,
+	quota_source,
+	quota_refreshed_at,
+	quota_blocked_until,
+	five_hour_remaining_pct,
+	five_hour_reset_at,
+	weekly_remaining_pct,
+	weekly_reset_at,
 	created_at,
 	updated_at
 FROM accounts
@@ -267,6 +312,23 @@ func (s *SQLiteStateStore) RotationStrategy() domain.RotationStrategy {
 // come from a closed enum, not user input.
 func rotationOrderBy(strategy domain.RotationStrategy) string {
 	switch strategy {
+	case domain.RotationQuotaFirst:
+		return `ORDER BY
+	CASE
+		WHEN quota_refreshed_at IS NULL THEN 1
+		ELSE 0
+	END ASC,
+	CASE
+		WHEN five_hour_remaining_pct IS NULL AND weekly_remaining_pct IS NULL THEN -1
+		WHEN five_hour_remaining_pct IS NULL THEN weekly_remaining_pct
+		WHEN weekly_remaining_pct IS NULL THEN five_hour_remaining_pct
+		WHEN five_hour_remaining_pct < weekly_remaining_pct THEN five_hour_remaining_pct
+		ELSE weekly_remaining_pct
+	END DESC,
+	plan_priority DESC,
+	daily_usage_count ASC,
+	COALESCE(last_used_at, '1970-01-01T00:00:00Z') ASC,
+	latency_ewma_ms ASC`
 	case domain.RotationRoundRobin:
 		return `ORDER BY COALESCE(last_used_at, '1970-01-01T00:00:00Z') ASC`
 	case domain.RotationRandom:
@@ -392,16 +454,24 @@ SELECT
 	active_leases,
 	max_concurrent,
 	retry_after_until,
+	quota_source,
+	quota_refreshed_at,
+	quota_blocked_until,
+	five_hour_remaining_pct,
+	five_hour_reset_at,
+	weekly_remaining_pct,
+	weekly_reset_at,
 	created_at,
 	updated_at
 FROM accounts
 WHERE status = 'active'
   AND (cooldown_until IS NULL OR cooldown_until <= ?)
+  AND (quota_blocked_until IS NULL OR quota_blocked_until <= ?)
   AND daily_usage_count < daily_limit
   AND active_leases < max_concurrent
 `
 
-	args := []any{formatTime(now)}
+	args := []any{formatTime(now), formatTime(now)}
 	if provider != "" {
 		query += "  AND provider = ?\n"
 		args = append(args, provider)
@@ -438,6 +508,13 @@ SELECT
 	active_leases,
 	max_concurrent,
 	retry_after_until,
+	quota_source,
+	quota_refreshed_at,
+	quota_blocked_until,
+	five_hour_remaining_pct,
+	five_hour_reset_at,
+	weekly_remaining_pct,
+	weekly_reset_at,
 	created_at,
 	updated_at
 FROM accounts
@@ -469,6 +546,9 @@ func accountEligible(selected *domain.AccountState, now time.Time) bool {
 		return false
 	}
 	if selected.CooldownUntil != nil && selected.CooldownUntil.After(now) {
+		return false
+	}
+	if selected.QuotaBlockedUntil != nil && selected.QuotaBlockedUntil.After(now) {
 		return false
 	}
 	if selected.DailyUsageCount >= selected.DailyLimit {
@@ -617,6 +697,13 @@ SELECT
 	active_leases,
 	max_concurrent,
 	retry_after_until,
+	quota_source,
+	quota_refreshed_at,
+	quota_blocked_until,
+	five_hour_remaining_pct,
+	five_hour_reset_at,
+	weekly_remaining_pct,
+	weekly_reset_at,
 	created_at,
 	updated_at
 FROM accounts
@@ -667,6 +754,42 @@ WHERE account_id = ?
 `, today, today, formatTime(now), latencyMs, 1-ewmaAlpha, latencyMs, ewmaAlpha, formatTime(now), accountID)
 	if err != nil {
 		return fmt.Errorf("record account success: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SQLiteStateStore) RecordQuotaSnapshot(ctx context.Context, accountID string, snapshot domain.AccountQuotaSnapshot) error {
+	now := time.Now().UTC()
+	refreshedAt := snapshot.RefreshedAt.UTC()
+	if refreshedAt.IsZero() {
+		refreshedAt = now
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+UPDATE accounts
+SET quota_source = ?,
+    quota_refreshed_at = ?,
+    quota_blocked_until = ?,
+    five_hour_remaining_pct = ?,
+    five_hour_reset_at = ?,
+    weekly_remaining_pct = ?,
+    weekly_reset_at = ?,
+    updated_at = ?
+WHERE account_id = ?
+`,
+		strings.TrimSpace(snapshot.Source),
+		formatTime(refreshedAt),
+		formatNullableTime(snapshot.BlockedUntil),
+		nullableInt(snapshot.FiveHourRemainingPct),
+		formatNullableTime(snapshot.FiveHourResetAt),
+		nullableInt(snapshot.WeeklyRemainingPct),
+		formatNullableTime(snapshot.WeeklyResetAt),
+		formatTime(now),
+		accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("record account quota snapshot: %w", err)
 	}
 
 	return nil
@@ -833,12 +956,26 @@ UPDATE accounts
 SET status = 'active',
     cooldown_until = NULL,
     retry_after_until = NULL,
+    quota_blocked_until = CASE
+		WHEN quota_blocked_until IS NOT NULL AND quota_blocked_until <= ? THEN NULL
+		ELSE quota_blocked_until
+	END,
     updated_at = ?
 WHERE status = 'cooldown'
   AND cooldown_until IS NOT NULL
   AND cooldown_until <= ?
-`, formatTime(now), formatTime(now)); err != nil {
+`, formatTime(now), formatTime(now), formatTime(now)); err != nil {
 		return fmt.Errorf("expire account cooldowns: %w", err)
+	}
+
+	if _, err := exec.ExecContext(ctx, `
+UPDATE accounts
+SET quota_blocked_until = NULL,
+    updated_at = ?
+WHERE quota_blocked_until IS NOT NULL
+  AND quota_blocked_until <= ?
+`, formatTime(now), formatTime(now)); err != nil {
+		return fmt.Errorf("expire account quota blocks: %w", err)
 	}
 
 	if _, err := exec.ExecContext(ctx, `
@@ -916,14 +1053,20 @@ type accountStateScanner interface {
 
 func scanAccountState(row accountStateScanner) (*domain.AccountState, error) {
 	var (
-		state           domain.AccountState
-		provider        string
-		status          string
-		lastUsedAt      sql.NullString
-		cooldownUntil   sql.NullString
-		retryAfterUntil sql.NullString
-		createdAt       string
-		updatedAt       string
+		state             domain.AccountState
+		provider          string
+		status            string
+		lastUsedAt        sql.NullString
+		cooldownUntil     sql.NullString
+		retryAfterUntil   sql.NullString
+		quotaRefreshedAt  sql.NullString
+		quotaBlockedUntil sql.NullString
+		fiveHourRemaining sql.NullInt64
+		fiveHourResetAt   sql.NullString
+		weeklyRemaining   sql.NullInt64
+		weeklyResetAt     sql.NullString
+		createdAt         string
+		updatedAt         string
 	)
 
 	err := row.Scan(
@@ -941,6 +1084,13 @@ func scanAccountState(row accountStateScanner) (*domain.AccountState, error) {
 		&state.ActiveLeases,
 		&state.MaxConcurrent,
 		&retryAfterUntil,
+		&state.QuotaSource,
+		&quotaRefreshedAt,
+		&quotaBlockedUntil,
+		&fiveHourRemaining,
+		&fiveHourResetAt,
+		&weeklyRemaining,
+		&weeklyResetAt,
 		&createdAt,
 		&updatedAt,
 	)
@@ -953,6 +1103,12 @@ func scanAccountState(row accountStateScanner) (*domain.AccountState, error) {
 	state.LastUsedAt = parseNullableTime(lastUsedAt)
 	state.CooldownUntil = parseNullableTime(cooldownUntil)
 	state.RetryAfterUntil = parseNullableTime(retryAfterUntil)
+	state.QuotaRefreshedAt = parseNullableTime(quotaRefreshedAt)
+	state.QuotaBlockedUntil = parseNullableTime(quotaBlockedUntil)
+	state.FiveHourRemainingPct = parseNullableInt(fiveHourRemaining)
+	state.FiveHourResetAt = parseNullableTime(fiveHourResetAt)
+	state.WeeklyRemainingPct = parseNullableInt(weeklyRemaining)
+	state.WeeklyResetAt = parseNullableTime(weeklyResetAt)
 	state.CreatedAt = parseTime(createdAt)
 	state.UpdatedAt = parseTime(updatedAt)
 
@@ -989,6 +1145,13 @@ func formatNullableTime(value *time.Time) any {
 	return formatTime(*value)
 }
 
+func nullableInt(value *int) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
 func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
@@ -999,6 +1162,14 @@ func parseNullableTime(value sql.NullString) *time.Time {
 	}
 
 	parsed := parseTime(value.String)
+	return &parsed
+}
+
+func parseNullableInt(value sql.NullInt64) *int {
+	if !value.Valid {
+		return nil
+	}
+	parsed := int(value.Int64)
 	return &parsed
 }
 

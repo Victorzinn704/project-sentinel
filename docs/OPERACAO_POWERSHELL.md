@@ -85,6 +85,8 @@ PowerShell -> Sentinel -> conta ChatGPT -> upstream ChatGPT/Codex -> resposta Op
 
 Para reduzir latência, prefira `-Effort high`. O modo `xhigh` é mais forte, mas naturalmente demora mais para começar a devolver texto.
 
+Se quiser reduzir custo médio sem sacrificar tarefas realmente difíceis, use `-Effort auto`. Nesse modo, o Sentinel mantém o piso em `high` e sobe para `xhigh` só quando o contexto parece pesado.
+
 ## 5. Monitorar Consumo
 
 Resumo geral:
@@ -93,10 +95,40 @@ Resumo geral:
 .\tools\sentinelctl.ps1 status
 ```
 
+Forçar refresh manual da quota:
+
+```powershell
+.\tools\sentinelctl.ps1 quota-refresh
+```
+
 Tabela de contas:
 
 ```powershell
 .\tools\sentinelctl.ps1 accounts
+```
+
+Consumo em barra (snapshot):
+
+```powershell
+.\tools\sentinelctl.ps1 consumo
+```
+
+Consumo em barra (ao vivo):
+
+```powershell
+.\tools\sentinelctl.ps1 consumo-watch 5
+```
+
+Painel contínuo no terminal:
+
+```powershell
+.\tools\sentinelctl.ps1 watch
+```
+
+Painel com intervalo de 3 segundos:
+
+```powershell
+.\tools\sentinelctl.ps1 watch 3
 ```
 
 Campos mais importantes:
@@ -108,6 +140,13 @@ daily_limit        limite local configurado
 error_count        falhas recentes registradas
 latency_ewma_ms    latência média suavizada
 active_leases      requests em andamento naquela conta
+```
+
+Leitura da barra de consumo:
+
+```txt
+src=chatgpt_wham_usage  consumo real da conta no upstream (5h/7d)
+src=daily_usage         fallback local por requests processadas no Sentinel
 ```
 
 Logs ao vivo:
@@ -129,6 +168,13 @@ Roteador padrão para `gpt-5.4` com esforço altíssimo:
 
 ```powershell
 .\tools\sentinelctl.ps1 use-model gpt-5.4 -Effort xhigh
+.\tools\sentinelctl.ps1 restart
+```
+
+Roteador padrão para `gpt-5.4` com esforço adaptativo:
+
+```powershell
+.\tools\sentinelctl.ps1 use-model gpt-5.4 -Effort auto
 .\tools\sentinelctl.ps1 restart
 ```
 
@@ -229,7 +275,7 @@ Instalar o provider local do Sentinel no Codex:
 O comando escreve um bloco gerenciado em:
 
 ```txt
-%USERPROFILE%\.codex\config.toml
+.\.codex\config.toml
 ```
 
 Configuração aplicada:
@@ -237,7 +283,7 @@ Configuração aplicada:
 ```toml
 model = "sentinel-router"
 model_provider = "sentinel"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "medium"
 
 [model_providers.sentinel]
 name = "Project Sentinel"
@@ -246,7 +292,9 @@ wire_api = "responses"
 env_key = "CODEX_API_KEY"
 ```
 
-Sem `-Model` ou `-Effort`, o comando usa `DEFAULT_MODEL` e `DEFAULT_REASONING_EFFORT` do `.env`. No setup atual, isso fica `sentinel-router` com `xhigh`.
+Valores aceitos pelo Codex para `model_reasoning_effort`: `minimal`, `low`, `medium`, `high`, `xhigh`.
+
+Sem `-Model`, o comando usa `DEFAULT_MODEL` do `.env`. Para effort no Codex, se `DEFAULT_REASONING_EFFORT=auto`, o `sentinelctl` converte para `medium` para manter o `config.toml` válido.
 
 Segurança operacional:
 
@@ -263,6 +311,20 @@ Para gravar `CODEX_API_KEY` no ambiente de usuário do Windows:
 ```
 
 Sem `-Persist`, a variável vale só para a sessão atual do PowerShell.
+
+Se você quiser alterar o Codex global da máquina em vez do projeto atual:
+
+```powershell
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig
+```
+
+Se quiser apontar o Codex global para um Sentinel remoto:
+
+```powershell
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL http://147.15.60.224:8080/v1
+```
+
+Como o config padrão agora é local ao projeto, rode o `codex` a partir da pasta do projeto para ele usar `.\.codex\config.toml`.
 
 ## 11. Diagnóstico Rápido
 
@@ -293,3 +355,13 @@ Modelo não apareceu:
 .\tools\sentinelctl.ps1 restart
 .\tools\sentinelctl.ps1 models
 ```
+
+## 12. Pré-publicação segura
+
+Antes de `git push` ou PR:
+
+```powershell
+.\tools\publication_guard.ps1
+```
+
+Se o resultado for `FALHOU`, não publique até corrigir os itens `[BLOCK]`.

@@ -56,6 +56,7 @@ type LeaseReleaser interface {
 	RecordRateLimit(ctx context.Context, accountID string, retryAfterSeconds int) error
 	RecordAuthFailure(ctx context.Context, accountID string) error
 	RecordTransientFailure(ctx context.Context, accountID string) error
+	RecordQuotaSnapshot(ctx context.Context, accountID string, snapshot domain.AccountQuotaSnapshot) error
 }
 
 type HandlerLogger interface {
