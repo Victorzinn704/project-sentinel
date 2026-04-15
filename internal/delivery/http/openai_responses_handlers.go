@@ -3,13 +3,22 @@ package httpdelivery
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"net/http/httptest"
 	"strings"
 	"time"
+)
+
+const (
+	responsesRoutingModeEnv  = "SENTINEL_RESPONSES_MODE"
+	responsesRoutingProbeEnv = "SENTINEL_RESPONSES_ROUTING_PROBE"
 )
 
 func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, codexPassthroughHandler http.HandlerFunc, defaultModel string) http.HandlerFunc {
@@ -20,11 +29,18 @@ func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, codexPassthroughHa
 			return
 		}
 
+		usePassthrough, decisionReason := shouldUseCodexPassthrough(r, raw)
+		if responsesRoutingProbeEnabled() {
+			logResponsesRoutingDecision(r, raw, usePassthrough, decisionReason)
+		}
+
 		// Codex CLI talks the native Codex backend protocol on top of the
 		// Responses API URL when configured with wire_api="responses". Skip
 		// the lossy translation pipeline (which drops `tools`, tool_calls and
 		// reasoning events) and proxy the request byte-for-byte.
-		if codexPassthroughHandler != nil && isCodexCLIRequest(r) {
+		if codexPassthroughHandler != nil && usePassthrough {
+			w.Header().Set("X-Sentinel-Responses-Route", "passthrough")
+			w.Header().Set("X-Sentinel-Responses-Reason", decisionReason)
 			passReq := r.Clone(r.Context())
 			passReq.URL.Path = "/backend-api/codex/responses"
 			passReq.Body = io.NopCloser(bytes.NewReader(raw))
@@ -33,6 +49,9 @@ func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, codexPassthroughHa
 			codexPassthroughHandler(w, passReq)
 			return
 		}
+
+		w.Header().Set("X-Sentinel-Responses-Route", "translate")
+		w.Header().Set("X-Sentinel-Responses-Reason", decisionReason)
 
 		chatRaw, responsesModel, stream, err := responsesToChatCompletionsRaw(raw, defaultModel)
 		if err != nil {
@@ -94,6 +113,80 @@ func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, codexPassthroughHa
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(responseBody)
 	}
+}
+
+func shouldUseCodexPassthrough(r *http.Request, raw []byte) (bool, string) {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv(responsesRoutingModeEnv)))
+	switch mode {
+	case "passthrough", "native", "force_passthrough":
+		return true, "env_passthrough"
+	case "translate", "force_translate", "compat":
+		return false, "env_translate"
+	}
+
+	if isCodexCLIRequest(r) {
+		return true, "codex_cli_header"
+	}
+	if responsesRequestHasTools(raw) {
+		return true, "tools_present"
+	}
+
+	return false, "default_translate"
+}
+
+func responsesRequestHasTools(raw []byte) bool {
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return false
+	}
+	toolsRaw, ok := body["tools"]
+	if !ok {
+		return false
+	}
+
+	trimmed := bytes.TrimSpace(toolsRaw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("[]")) {
+		return false
+	}
+
+	var tools []json.RawMessage
+	if err := json.Unmarshal(trimmed, &tools); err == nil {
+		return len(tools) > 0
+	}
+
+	return true
+}
+
+func responsesRoutingProbeEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(responsesRoutingProbeEnv)))
+	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+func logResponsesRoutingDecision(r *http.Request, raw []byte, usePassthrough bool, reason string) {
+	bodyHash := sha256.Sum256(raw)
+	hashPrefix := hex.EncodeToString(bodyHash[:6])
+	ua := strings.TrimSpace(r.Header.Get("User-Agent"))
+	if len(ua) > 120 {
+		ua = ua[:120]
+	}
+	originator := strings.TrimSpace(r.Header.Get("Originator"))
+	if len(originator) > 80 {
+		originator = originator[:80]
+	}
+
+	log.Printf(
+		"responses routing probe method=%s path=%s passthrough=%t reason=%s request_id=%q body_bytes=%d body_sha256_12=%s has_tools=%t ua=%q originator=%q",
+		r.Method,
+		r.URL.Path,
+		usePassthrough,
+		reason,
+		strings.TrimSpace(r.Header.Get("X-Request-ID")),
+		len(raw),
+		hashPrefix,
+		responsesRequestHasTools(raw),
+		ua,
+		originator,
+	)
 }
 
 func responsesToChatCompletionsRaw(raw []byte, defaultModel string) ([]byte, string, bool, error) {
