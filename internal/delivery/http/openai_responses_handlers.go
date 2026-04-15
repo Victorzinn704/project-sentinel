@@ -19,6 +19,7 @@ import (
 const (
 	responsesRoutingModeEnv  = "SENTINEL_RESPONSES_MODE"
 	responsesRoutingProbeEnv = "SENTINEL_RESPONSES_ROUTING_PROBE"
+	codexPassthroughModelEnv = "SENTINEL_CODEX_PASSTHROUGH_MODEL"
 )
 
 func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, codexPassthroughHandler http.HandlerFunc, defaultModel string) http.HandlerFunc {
@@ -39,12 +40,16 @@ func PostOpenAIResponsesHandler(chatHandler http.HandlerFunc, codexPassthroughHa
 		// the lossy translation pipeline (which drops `tools`, tool_calls and
 		// reasoning events) and proxy the request byte-for-byte.
 		if codexPassthroughHandler != nil && usePassthrough {
+			passthroughRaw, rewrittenModel := normalizeCodexPassthroughModel(raw, defaultModel)
+			if rewrittenModel {
+				decisionReason += "+model_rewrite"
+			}
 			w.Header().Set("X-Sentinel-Responses-Route", "passthrough")
 			w.Header().Set("X-Sentinel-Responses-Reason", decisionReason)
 			passReq := r.Clone(r.Context())
 			passReq.URL.Path = "/backend-api/codex/responses"
-			passReq.Body = io.NopCloser(bytes.NewReader(raw))
-			passReq.ContentLength = int64(len(raw))
+			passReq.Body = io.NopCloser(bytes.NewReader(passthroughRaw))
+			passReq.ContentLength = int64(len(passthroughRaw))
 			passReq.Header = r.Header.Clone()
 			codexPassthroughHandler(w, passReq)
 			return
@@ -155,6 +160,54 @@ func responsesRequestHasTools(raw []byte) bool {
 	}
 
 	return true
+}
+
+func normalizeCodexPassthroughModel(raw []byte, defaultModel string) ([]byte, bool) {
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return raw, false
+	}
+
+	currentModel := rawString(body["model"])
+	if !shouldRewriteCodexModel(currentModel, defaultModel) {
+		return raw, false
+	}
+
+	rewrittenModel := strings.TrimSpace(os.Getenv(codexPassthroughModelEnv))
+	if rewrittenModel == "" {
+		rewrittenModel = "gpt-5.4"
+	}
+	rewrittenJSON, err := json.Marshal(rewrittenModel)
+	if err != nil {
+		return raw, false
+	}
+	body["model"] = rewrittenJSON
+
+	out, err := json.Marshal(body)
+	if err != nil {
+		return raw, false
+	}
+
+	return out, true
+}
+
+func shouldRewriteCodexModel(currentModel string, defaultModel string) bool {
+	current := strings.ToLower(strings.TrimSpace(currentModel))
+	if current == "" {
+		return true
+	}
+	if current == "sentinel-router" {
+		return true
+	}
+	if strings.HasPrefix(current, "sentinel-") {
+		return true
+	}
+	defaultNormalized := strings.ToLower(strings.TrimSpace(defaultModel))
+	if defaultNormalized != "" && current == defaultNormalized && strings.HasPrefix(defaultNormalized, "sentinel-") {
+		return true
+	}
+
+	return false
 }
 
 func responsesRoutingProbeEnabled() bool {
