@@ -81,6 +81,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 			deps.Logger,
 		)))
 		mux.HandleFunc("/backend-api/codex/responses", codexHandler)
+		mux.HandleFunc("/v1/backend-api/codex/responses", codexHandler)
+		mux.HandleFunc("/v1/v1/backend-api/codex/responses", codexHandler)
 	}
 	if deps.AccountLister != nil && deps.AccountStatusSetter != nil {
 		mux.HandleFunc("/admin/accounts", method(http.MethodGet, auth(deps.APIKey, GetAdminAccountsHandler(deps.AccountLister))))
