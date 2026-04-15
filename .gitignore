@@ -9,6 +9,7 @@ sessions/*
 *.tmp
 *.exe
 *.exe~
+*.test.exe
 *.test
 .sentinel.pid
 
@@ -18,11 +19,14 @@ coverage.out
 .tools/
 .claude/
 .codex/
+.vscode/
 
 *.db
 *.db-shm
 *.db-wal
 *.enc
+*.tar
+*.bak-*
 
 # Local helper scripts may contain plaintext credentials after editing.
 register_accounts.ps1

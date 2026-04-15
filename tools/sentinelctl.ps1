@@ -76,6 +76,16 @@ function Set-DotEnvValue {
     Set-Content -Path $envPath -Value $lines
 }
 
+function Get-DotEnvValue {
+    param([Parameter(Mandatory = $true)][string]$Key)
+
+    $envMap = Read-DotEnv
+    if ($envMap.ContainsKey($Key)) {
+        return $envMap[$Key]
+    }
+    return ""
+}
+
 function Get-BaseURL {
     $envMap = Read-DotEnv
     $addr = ":8080"
@@ -176,10 +186,23 @@ function Assert-SentinelDefaultReasoningEffort {
     }
 }
 
-function Get-AuthHeaders {
-    $envMap = Read-DotEnv
-    if ($envMap.ContainsKey("SENTINEL_API_KEY") -and $envMap["SENTINEL_API_KEY"]) {
-        return @{ "X-API-Key" = $envMap["SENTINEL_API_KEY"] }
+function Get-RuntimeAuthHeaders {
+    $apiKey = Get-DotEnvValue -Key "SENTINEL_API_KEY"
+    if (-not [string]::IsNullOrWhiteSpace($apiKey)) {
+        return @{ "X-API-Key" = $apiKey }
+    }
+    return @{}
+}
+
+function Get-AdminAuthHeaders {
+    $adminKey = Get-DotEnvValue -Key "SENTINEL_ADMIN_API_KEY"
+    if (-not [string]::IsNullOrWhiteSpace($adminKey)) {
+        return @{ "X-API-Key" = $adminKey }
+    }
+
+    $runtimeKey = Get-DotEnvValue -Key "SENTINEL_API_KEY"
+    if (-not [string]::IsNullOrWhiteSpace($runtimeKey)) {
+        return @{ "X-API-Key" = $runtimeKey }
     }
     return @{}
 }
@@ -193,7 +216,7 @@ function Invoke-Sentinel {
         [hashtable]$ExtraHeaders = @{}
     )
 
-    $headers = Get-AuthHeaders
+    $headers = Get-RuntimeAuthHeaders
     foreach ($key in $ExtraHeaders.Keys) {
         $headers[$key] = $ExtraHeaders[$key]
     }
@@ -218,7 +241,7 @@ Usage:
     .\tools\sentinelctl.ps1 consumo
     .\tools\sentinelctl.ps1 consumo-watch
     .\tools\sentinelctl.ps1 consumo-watch 5
-    .\tools\sentinelctl.ps1 consumo -BaseURL http://147.15.60.224:8080/v1
+  .\tools\sentinelctl.ps1 consumo -BaseURL https://sentinel.example.com/v1
   .\tools\sentinelctl.ps1 accounts
   .\tools\sentinelctl.ps1 models
   .\tools\sentinelctl.ps1 chat -Model gpt-5.4 -Effort high -Prompt "Responda apenas: ok"
@@ -230,11 +253,15 @@ Usage:
   .\tools\sentinelctl.ps1 enable acc_suporte_deskimperial_online
   .\tools\sentinelctl.ps1 use-model gpt-5.4 -Effort xhigh
   .\tools\sentinelctl.ps1 codex-install
-  .\tools\sentinelctl.ps1 codex-install -BaseURL http://147.15.60.224:8080/v1
+  .\tools\sentinelctl.ps1 codex-install -BaseURL https://sentinel.example.com/v1
   .\tools\sentinelctl.ps1 codex-install -GlobalConfig
   .\tools\sentinelctl.ps1 codex-install -Persist
   .\tools\sentinelctl.ps1 key-show
   .\tools\sentinelctl.ps1 key-new
+  .\tools\sentinelctl.ps1 admin-key-show
+  .\tools\sentinelctl.ps1 admin-key-new
+  .\tools\sentinelctl.ps1 session-key-rotate
+  .\tools\sentinelctl.ps1 secrets-rotate
   .\tools\sentinelctl.ps1 key-revoke
   .\tools\sentinelctl.ps1 restart
   .\tools\sentinelctl.ps1 logs -Watch
@@ -248,7 +275,10 @@ Notes:
   codex-install writes .codex/config.toml in this project by default; use -GlobalConfig for ~/.codex/config.toml.
   codex-install accepts -BaseURL to point Codex at a remote Sentinel instead of the local one.
   codex-install also honors CODEX_BASE_URL and CODEX_REASONING_EFFORT from .env when present.
-  key-new and key-revoke rotate SENTINEL_API_KEY and restart by default.
+  key-new, key-rotate and key-revoke rotate the runtime SENTINEL_API_KEY.
+  admin-key-new, admin-key-rotate and admin-key-revoke rotate SENTINEL_ADMIN_API_KEY.
+  session-key-rotate re-encrypts sessions with a fresh SESSION_ENCRYPTION_KEY.
+  secrets-rotate rotates runtime key, admin key and session key in one pass.
   Rotation defaults to quota_first when quota snapshots are available.
 "@
 }
@@ -264,14 +294,17 @@ function Get-WatchIntervalSeconds {
 }
 
 function Resolve-SentinelAdminBaseURL {
-    param([string]$OverrideBaseURL = "")
+    param(
+        [string]$OverrideBaseURL = "",
+        [bool]$PreferCodexBaseURL = $false
+    )
 
     $base = ""
     if (-not [string]::IsNullOrWhiteSpace($OverrideBaseURL)) {
         $base = $OverrideBaseURL.Trim()
     } else {
         $envMap = Read-DotEnv
-        if ($envMap.ContainsKey("CODEX_BASE_URL") -and -not [string]::IsNullOrWhiteSpace($envMap["CODEX_BASE_URL"])) {
+        if ($PreferCodexBaseURL -and $envMap.ContainsKey("CODEX_BASE_URL") -and -not [string]::IsNullOrWhiteSpace($envMap["CODEX_BASE_URL"])) {
             $base = $envMap["CODEX_BASE_URL"].Trim()
         } else {
             $base = (Get-BaseURL).Trim()
@@ -293,11 +326,12 @@ function Invoke-SentinelAdmin {
         [Parameter(Mandatory = $true)][string]$Path,
         [object]$Body = $null,
         [int]$TimeoutSec = 30,
-        [string]$BaseURLOverride = ""
+        [string]$BaseURLOverride = "",
+        [bool]$PreferCodexBaseURL = $false
     )
 
-    $headers = Get-AuthHeaders
-    $baseURL = Resolve-SentinelAdminBaseURL -OverrideBaseURL $BaseURLOverride
+    $headers = Get-AdminAuthHeaders
+    $baseURL = Resolve-SentinelAdminBaseURL -OverrideBaseURL $BaseURLOverride -PreferCodexBaseURL $PreferCodexBaseURL
     $uri = "$baseURL$Path"
 
     if ($null -eq $Body) {
@@ -330,9 +364,9 @@ function New-UsageBar {
 function Show-ConsumptionBars {
     param([string]$BaseURLOverride = "")
 
-    $baseURL = Resolve-SentinelAdminBaseURL -OverrideBaseURL $BaseURLOverride
-    $state = Invoke-SentinelAdmin -Method Get -Path "/admin/state" -BaseURLOverride $baseURL
-    $accounts = Invoke-SentinelAdmin -Method Get -Path "/admin/accounts" -BaseURLOverride $baseURL
+    $baseURL = Resolve-SentinelAdminBaseURL -OverrideBaseURL $BaseURLOverride -PreferCodexBaseURL $true
+    $state = Invoke-SentinelAdmin -Method Get -Path "/admin/state" -BaseURLOverride $baseURL -PreferCodexBaseURL $true
+    $accounts = Invoke-SentinelAdmin -Method Get -Path "/admin/accounts" -BaseURLOverride $baseURL -PreferCodexBaseURL $true
 
     [pscustomobject]@{
         at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -394,8 +428,8 @@ function Show-SentinelWatchFrame {
         throw "Sentinel is not responding at $(Get-BaseURL)"
     }
 
-    $state = Invoke-Sentinel -Method Get -Path "/admin/state"
-    $accounts = Invoke-Sentinel -Method Get -Path "/admin/accounts"
+    $state = Invoke-SentinelAdmin -Method Get -Path "/admin/state"
+    $accounts = Invoke-SentinelAdmin -Method Get -Path "/admin/accounts"
     $forcedAccount = ""
     if ($state.PSObject.Properties["forced_account_id"]) {
         $forcedAccount = $state.forced_account_id
@@ -421,13 +455,29 @@ function Show-SentinelWatchFrame {
 }
 
 function New-SentinelAPIKey {
-    param([int]$ByteCount = 32)
+    param(
+        [int]$ByteCount = 32,
+        [string]$Prefix = "sk-sentinel-"
+    )
 
     $bytes = [byte[]]::new($ByteCount)
     [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
     $encoded = [Convert]::ToBase64String($bytes).TrimEnd("=")
     $encoded = $encoded.Replace("+", "-").Replace("/", "_")
-    return "sk-sentinel-$encoded"
+    return "$Prefix$encoded"
+}
+
+function New-SessionEncryptionKey {
+    param([int]$Length = 32)
+
+    $alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+    $bytes = [byte[]]::new($Length)
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $chars = New-Object char[] $Length
+    for ($i = 0; $i -lt $Length; $i++) {
+        $chars[$i] = $alphabet[$bytes[$i] % $alphabet.Length]
+    }
+    return -join $chars
 }
 
 function Mask-Secret {
@@ -443,11 +493,257 @@ function Mask-Secret {
 }
 
 function Get-CurrentAPIKey {
-    $envMap = Read-DotEnv
-    if ($envMap.ContainsKey("SENTINEL_API_KEY")) {
-        return $envMap["SENTINEL_API_KEY"]
+    return Get-DotEnvValue -Key "SENTINEL_API_KEY"
+}
+
+function Get-CurrentAdminAPIKey {
+    return Get-DotEnvValue -Key "SENTINEL_ADMIN_API_KEY"
+}
+
+function Get-CurrentSessionEncryptionKey {
+    return Get-DotEnvValue -Key "SESSION_ENCRYPTION_KEY"
+}
+
+function Resolve-WorkspacePath {
+    param([Parameter(Mandatory = $true)][string]$PathValue)
+
+    if ([string]::IsNullOrWhiteSpace($PathValue)) {
+        return $Root
     }
-    return ""
+    if ([System.IO.Path]::IsPathRooted($PathValue)) {
+        return $PathValue
+    }
+    return Join-Path $Root $PathValue
+}
+
+function Get-SessionStoreDirectory {
+    $pathValue = Get-DotEnvValue -Key "SESSION_STORE_PATH"
+    if ([string]::IsNullOrWhiteSpace($pathValue)) {
+        $pathValue = "./sessions"
+    }
+    return Resolve-WorkspacePath -PathValue $pathValue
+}
+
+function Backup-FileIfPresent {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return ""
+    }
+
+    $backupPath = "$Path.bak-$(Get-Date -Format yyyyMMddHHmmss)"
+    Copy-Item -LiteralPath $Path -Destination $backupPath -Force
+    return $backupPath
+}
+
+function Convert-SessionKeyToBytes {
+    param([Parameter(Mandatory = $true)][string]$KeyValue)
+
+    if ($KeyValue.Length -ne 32) {
+        throw "SESSION_ENCRYPTION_KEY must be exactly 32 characters."
+    }
+
+    return [System.Text.Encoding]::UTF8.GetBytes($KeyValue)
+}
+
+function Unprotect-SessionPayload {
+    param(
+        [Parameter(Mandatory = $true)][byte[]]$KeyBytes,
+        [Parameter(Mandatory = $true)][byte[]]$Ciphertext
+    )
+
+    $nonceSize = 12
+    $tagSize = 16
+    if ($Ciphertext.Length -le ($nonceSize + $tagSize)) {
+        throw "Invalid encrypted session payload."
+    }
+
+    $nonce = [byte[]]::new($nonceSize)
+    [Array]::Copy($Ciphertext, 0, $nonce, 0, $nonceSize)
+
+    $payloadLength = $Ciphertext.Length - $nonceSize
+    $cipherLength = $payloadLength - $tagSize
+    if ($cipherLength -le 0) {
+        throw "Invalid encrypted session payload."
+    }
+
+    $cipher = [byte[]]::new($cipherLength)
+    [Array]::Copy($Ciphertext, $nonceSize, $cipher, 0, $cipherLength)
+
+    $tag = [byte[]]::new($tagSize)
+    [Array]::Copy($Ciphertext, $nonceSize + $cipherLength, $tag, 0, $tagSize)
+
+    $plaintext = [byte[]]::new($cipherLength)
+    $aes = [System.Security.Cryptography.AesGcm]::new($KeyBytes)
+    try {
+        $aes.Decrypt($nonce, $cipher, $tag, $plaintext)
+    } finally {
+        $aes.Dispose()
+    }
+
+    return $plaintext
+}
+
+function Protect-SessionPayload {
+    param(
+        [Parameter(Mandatory = $true)][byte[]]$KeyBytes,
+        [Parameter(Mandatory = $true)][byte[]]$Plaintext
+    )
+
+    $nonce = [byte[]]::new(12)
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($nonce)
+
+    $cipher = [byte[]]::new($Plaintext.Length)
+    $tag = [byte[]]::new(16)
+    $aes = [System.Security.Cryptography.AesGcm]::new($KeyBytes)
+    try {
+        $aes.Encrypt($nonce, $Plaintext, $cipher, $tag)
+    } finally {
+        $aes.Dispose()
+    }
+
+    $output = [byte[]]::new($nonce.Length + $cipher.Length + $tag.Length)
+    [Array]::Copy($nonce, 0, $output, 0, $nonce.Length)
+    [Array]::Copy($cipher, 0, $output, $nonce.Length, $cipher.Length)
+    [Array]::Copy($tag, 0, $output, $nonce.Length + $cipher.Length, $tag.Length)
+    return $output
+}
+
+function Write-BytesAtomically {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][byte[]]$Bytes
+    )
+
+    $directory = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $tmp = "$Path.tmp"
+    try {
+        [System.IO.File]::WriteAllBytes($tmp, $Bytes)
+        Move-Item -LiteralPath $tmp -Destination $Path -Force
+    } finally {
+        if (Test-Path -LiteralPath $tmp) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Test-SentinelRunning {
+    return $null -ne (Get-HealthOrNull)
+}
+
+function Invoke-ManagedRestart {
+    param(
+        [Parameter(Mandatory = $true)][bool]$Restart,
+        [Parameter(Mandatory = $true)][string]$SuccessMessage,
+        [Parameter(Mandatory = $true)][string]$PendingRestartMessage
+    )
+
+    if (-not $Restart) {
+        return $PendingRestartMessage
+    }
+
+    if (-not (Test-SentinelRunning)) {
+        return "Secret was written to .env. Sentinel is not running, so no in-memory key remained active."
+    }
+
+    Stop-Sentinel
+    Start-Sleep -Milliseconds 500
+    Start-Sentinel
+    return $SuccessMessage
+}
+
+function Rotate-DotEnvSecret {
+    param(
+        [Parameter(Mandatory = $true)][string]$KeyName,
+        [Parameter(Mandatory = $true)][string]$Prefix,
+        [int]$ByteCount = 32
+    )
+
+    $oldKey = Get-DotEnvValue -Key $KeyName
+    $newKey = New-SentinelAPIKey -ByteCount $ByteCount -Prefix $Prefix
+    Set-DotEnvValue -Key $KeyName -NewValue $newKey
+
+    return [pscustomobject]@{
+        key_name = $KeyName
+        old_key = $oldKey
+        new_key = $newKey
+    }
+}
+
+function Refresh-CodexRuntimeKey {
+    param(
+        [string]$OldKey,
+        [string]$NewKey
+    )
+
+    if ([string]::IsNullOrWhiteSpace($NewKey)) {
+        return
+    }
+
+    if ($env:CODEX_API_KEY -eq $OldKey -or [string]::IsNullOrWhiteSpace($env:CODEX_API_KEY)) {
+        $env:CODEX_API_KEY = $NewKey
+    }
+
+    $persisted = [System.Environment]::GetEnvironmentVariable("CODEX_API_KEY", "User")
+    if ($persisted -eq $OldKey) {
+        [System.Environment]::SetEnvironmentVariable("CODEX_API_KEY", $NewKey, "User")
+    }
+}
+
+function Invoke-SessionEncryptionRotation {
+    param([string]$NewKey = "")
+
+    if ([string]::IsNullOrWhiteSpace($NewKey)) {
+        $NewKey = New-SessionEncryptionKey
+    }
+
+    $sessionDir = Get-SessionStoreDirectory
+    $files = @()
+    if (Test-Path -LiteralPath $sessionDir -PathType Container) {
+        $files = @(Get-ChildItem -LiteralPath $sessionDir -Filter *.json.enc -File -ErrorAction SilentlyContinue)
+    }
+
+    $currentKey = Get-CurrentSessionEncryptionKey
+    $backupDir = ""
+    if ($files.Count -gt 0) {
+        if ([string]::IsNullOrWhiteSpace($currentKey)) {
+            throw "SESSION_ENCRYPTION_KEY is empty; cannot re-encrypt existing sessions safely."
+        }
+
+        $backupDir = Join-Path $sessionDir ("rotation-backup-" + (Get-Date -Format yyyyMMddHHmmss))
+        New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+        foreach ($file in $files) {
+            Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $backupDir $file.Name) -Force
+        }
+
+        $oldKeyBytes = Convert-SessionKeyToBytes -KeyValue $currentKey
+        $newKeyBytes = Convert-SessionKeyToBytes -KeyValue $NewKey
+
+        try {
+            foreach ($file in $files) {
+                $ciphertext = [System.IO.File]::ReadAllBytes($file.FullName)
+                $plaintext = Unprotect-SessionPayload -KeyBytes $oldKeyBytes -Ciphertext $ciphertext
+                $rewritten = Protect-SessionPayload -KeyBytes $newKeyBytes -Plaintext $plaintext
+                Write-BytesAtomically -Path $file.FullName -Bytes $rewritten
+            }
+        } catch {
+            foreach ($backupFile in Get-ChildItem -LiteralPath $backupDir -Filter *.json.enc -File -ErrorAction SilentlyContinue) {
+                Copy-Item -LiteralPath $backupFile.FullName -Destination (Join-Path $sessionDir $backupFile.Name) -Force
+            }
+            throw
+        }
+    }
+
+    Set-DotEnvValue -Key "SESSION_ENCRYPTION_KEY" -NewValue $NewKey
+    return [pscustomobject]@{
+        sessions_reencrypted = $files.Count
+        backup_dir = if ($backupDir) { $backupDir } else { "<none>" }
+        session_encryption_key = $NewKey
+    }
 }
 
 function Rotate-APIKey {
@@ -456,23 +752,78 @@ function Rotate-APIKey {
         [bool]$Restart = $true
     )
 
-    $oldKey = Get-CurrentAPIKey
-    $newKey = New-SentinelAPIKey -ByteCount $ByteCount
-    Set-DotEnvValue -Key "SENTINEL_API_KEY" -NewValue $newKey
+    $result = Rotate-DotEnvSecret -KeyName "SENTINEL_API_KEY" -Prefix "sk-sentinel-" -ByteCount $ByteCount
+    Refresh-CodexRuntimeKey -OldKey $result.old_key -NewKey $result.new_key
 
     [pscustomobject]@{
-        old_key = Mask-Secret $oldKey
-        new_key = $newKey
+        old_key = Mask-Secret $result.old_key
+        new_key = $result.new_key
     } | Format-List
 
-    if ($Restart) {
-        Stop-Sentinel
-        Start-Sleep -Milliseconds 500
-        Start-Sentinel
-        "Old API key revoked. New API key is active now."
-    } else {
-        "New API key was written to .env. Run '.\tools\sentinelctl.ps1 restart' to revoke the old key in memory."
-    }
+    Invoke-ManagedRestart `
+        -Restart $Restart `
+        -SuccessMessage "Old runtime API key revoked. New runtime API key is active now." `
+        -PendingRestartMessage "New runtime API key was written to .env. Run '.\tools\sentinelctl.ps1 restart' to revoke the old key in memory."
+}
+
+function Rotate-AdminAPIKey {
+    param(
+        [int]$ByteCount = 32,
+        [bool]$Restart = $true
+    )
+
+    $result = Rotate-DotEnvSecret -KeyName "SENTINEL_ADMIN_API_KEY" -Prefix "sk-sentinel-admin-" -ByteCount $ByteCount
+
+    [pscustomobject]@{
+        old_key = Mask-Secret $result.old_key
+        new_key = $result.new_key
+    } | Format-List
+
+    Invoke-ManagedRestart `
+        -Restart $Restart `
+        -SuccessMessage "Old admin API key revoked. New admin API key is active now." `
+        -PendingRestartMessage "New admin API key was written to .env. Run '.\tools\sentinelctl.ps1 restart' to revoke the old admin key in memory."
+}
+
+function Rotate-SessionEncryptionKey {
+    param([bool]$Restart = $true)
+
+    $result = Invoke-SessionEncryptionRotation
+    $result | Format-List
+
+    Invoke-ManagedRestart `
+        -Restart $Restart `
+        -SuccessMessage "Session encryption key rotated and existing sessions were re-encrypted." `
+        -PendingRestartMessage "New session encryption key was written to .env. Run '.\tools\sentinelctl.ps1 restart' to reload it in memory."
+}
+
+function Rotate-AllSecrets {
+    param(
+        [int]$ByteCount = 32,
+        [bool]$Restart = $true
+    )
+
+    $envBackup = Backup-FileIfPresent -Path (Join-Path $Root ".env")
+    $runtime = Rotate-DotEnvSecret -KeyName "SENTINEL_API_KEY" -Prefix "sk-sentinel-" -ByteCount $ByteCount
+    $admin = Rotate-DotEnvSecret -KeyName "SENTINEL_ADMIN_API_KEY" -Prefix "sk-sentinel-admin-" -ByteCount $ByteCount
+    $session = Invoke-SessionEncryptionRotation
+    Refresh-CodexRuntimeKey -OldKey $runtime.old_key -NewKey $runtime.new_key
+
+    [pscustomobject]@{
+        env_backup = if ($envBackup) { $envBackup } else { "<none>" }
+        runtime_old_key = Mask-Secret $runtime.old_key
+        runtime_new_key = $runtime.new_key
+        admin_old_key = Mask-Secret $admin.old_key
+        admin_new_key = $admin.new_key
+        sessions_reencrypted = $session.sessions_reencrypted
+        session_backup_dir = $session.backup_dir
+        session_encryption_key = $session.session_encryption_key
+    } | Format-List
+
+    Invoke-ManagedRestart `
+        -Restart $Restart `
+        -SuccessMessage "Runtime API key, admin API key and session encryption key rotated. Existing sessions were re-encrypted." `
+        -PendingRestartMessage "Runtime, admin and session keys were written to .env. Run '.\tools\sentinelctl.ps1 restart' to load them in memory."
 }
 
 function Get-HealthOrNull {
@@ -483,6 +834,31 @@ function Get-HealthOrNull {
     }
 }
 
+function Test-SentinelBinaryStale {
+    param([Parameter(Mandatory = $true)][string]$BinaryPath)
+
+    if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
+        return $true
+    }
+
+    $binaryWriteUtc = (Get-Item -LiteralPath $BinaryPath).LastWriteTimeUtc
+    $sources = @()
+    foreach ($path in @("cmd", "internal")) {
+        $fullPath = Join-Path $Root $path
+        if (Test-Path -LiteralPath $fullPath -PathType Container) {
+            $sources += Get-ChildItem -LiteralPath $fullPath -Recurse -Filter *.go -File
+        }
+    }
+
+    foreach ($source in $sources) {
+        if ($source.LastWriteTimeUtc -gt $binaryWriteUtc) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Start-Sentinel {
     if (Get-HealthOrNull) {
         "Sentinel already responds at $(Get-BaseURL)"
@@ -490,7 +866,7 @@ function Start-Sentinel {
     }
 
     $exe = Join-Path $Root ".tools\sentinel.exe"
-    if (-not (Test-Path $exe)) {
+    if (Test-SentinelBinaryStale -BinaryPath $exe) {
         $go = Join-Path $Root ".tools\go\bin\go.exe"
         if (-not (Test-Path $go)) {
             throw "Missing $exe and local Go toolchain $go"
@@ -863,8 +1239,8 @@ switch ($Command.ToLowerInvariant()) {
             "Sentinel is not responding at $(Get-BaseURL)"
             break
         }
-        $state = Invoke-Sentinel -Method Get -Path "/admin/state"
-        $accounts = Invoke-Sentinel -Method Get -Path "/admin/accounts"
+        $state = Invoke-SentinelAdmin -Method Get -Path "/admin/state"
+        $accounts = Invoke-SentinelAdmin -Method Get -Path "/admin/accounts"
         $forcedAccount = ""
         if ($state.PSObject.Properties["forced_account_id"]) {
             $forcedAccount = $state.forced_account_id
@@ -890,12 +1266,12 @@ switch ($Command.ToLowerInvariant()) {
     }
 
     "state" {
-        Invoke-Sentinel -Method Get -Path "/admin/state" | ConvertTo-Json -Depth 8
+        Invoke-SentinelAdmin -Method Get -Path "/admin/state" | ConvertTo-Json -Depth 8
         break
     }
 
     "accounts" {
-        $accounts = Invoke-Sentinel -Method Get -Path "/admin/accounts"
+        $accounts = Invoke-SentinelAdmin -Method Get -Path "/admin/accounts"
         $accounts.accounts |
             Select-Object account_id, provider, status, quota_source, quota_refreshed_at, quota_bottleneck_pct, five_hour_remaining_pct, weekly_remaining_pct, quota_blocked_until, daily_usage_count, active_leases, cooldown_until |
             Format-Table -AutoSize
@@ -955,30 +1331,30 @@ switch ($Command.ToLowerInvariant()) {
     }
 
     "quota-refresh" {
-        Invoke-SentinelAdmin -Method Post -Path "/admin/quota/refresh" -BaseURLOverride $BaseURL | ConvertTo-Json -Depth 8
+        Invoke-SentinelAdmin -Method Post -Path "/admin/quota/refresh" -BaseURLOverride $BaseURL -PreferCodexBaseURL $true | ConvertTo-Json -Depth 8
         break
     }
 
     "force" {
         if (-not $Value) { throw "Usage: .\tools\sentinelctl.ps1 force <account_id>" }
-        Invoke-Sentinel -Method Post -Path "/admin/force" -Body @{ account_id = $Value } | ConvertTo-Json -Depth 8
+        Invoke-SentinelAdmin -Method Post -Path "/admin/force" -Body @{ account_id = $Value } | ConvertTo-Json -Depth 8
         break
     }
 
     "unforce" {
-        Invoke-Sentinel -Method Post -Path "/admin/force" -Body @{ enabled = $false } | ConvertTo-Json -Depth 8
+        Invoke-SentinelAdmin -Method Post -Path "/admin/force" -Body @{ enabled = $false } | ConvertTo-Json -Depth 8
         break
     }
 
     "disable" {
         if (-not $Value) { throw "Usage: .\tools\sentinelctl.ps1 disable <account_id>" }
-        Invoke-Sentinel -Method Post -Path "/admin/accounts/$Value/disable" | ConvertTo-Json -Depth 8
+        Invoke-SentinelAdmin -Method Post -Path "/admin/accounts/$Value/disable" | ConvertTo-Json -Depth 8
         break
     }
 
     "enable" {
         if (-not $Value) { throw "Usage: .\tools\sentinelctl.ps1 enable <account_id>" }
-        Invoke-Sentinel -Method Post -Path "/admin/accounts/$Value/enable" | ConvertTo-Json -Depth 8
+        Invoke-SentinelAdmin -Method Post -Path "/admin/accounts/$Value/enable" | ConvertTo-Json -Depth 8
         break
     }
 
@@ -1021,6 +1397,8 @@ switch ($Command.ToLowerInvariant()) {
     "key-show" {
         [pscustomobject]@{
             sentinel_api_key = Mask-Secret (Get-CurrentAPIKey)
+            sentinel_admin_api_key = Mask-Secret (Get-CurrentAdminAPIKey)
+            session_encryption_key = Mask-Secret (Get-CurrentSessionEncryptionKey)
         } | Format-List
         break
     }
@@ -1037,6 +1415,38 @@ switch ($Command.ToLowerInvariant()) {
 
     "key-revoke" {
         Rotate-APIKey -ByteCount $Bytes -Restart (-not $NoRestart)
+        break
+    }
+
+    "admin-key-show" {
+        [pscustomobject]@{
+            sentinel_admin_api_key = Mask-Secret (Get-CurrentAdminAPIKey)
+        } | Format-List
+        break
+    }
+
+    "admin-key-new" {
+        Rotate-AdminAPIKey -ByteCount $Bytes -Restart (-not $NoRestart)
+        break
+    }
+
+    "admin-key-rotate" {
+        Rotate-AdminAPIKey -ByteCount $Bytes -Restart (-not $NoRestart)
+        break
+    }
+
+    "admin-key-revoke" {
+        Rotate-AdminAPIKey -ByteCount $Bytes -Restart (-not $NoRestart)
+        break
+    }
+
+    "session-key-rotate" {
+        Rotate-SessionEncryptionKey -Restart (-not $NoRestart)
+        break
+    }
+
+    "secrets-rotate" {
+        Rotate-AllSecrets -ByteCount $Bytes -Restart (-not $NoRestart)
         break
     }
 

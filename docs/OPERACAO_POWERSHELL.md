@@ -204,6 +204,30 @@ Revogar por rotação:
 .\tools\sentinelctl.ps1 key-revoke
 ```
 
+Ver admin key mascarada:
+
+```powershell
+.\tools\sentinelctl.ps1 admin-key-show
+```
+
+Rotacionar admin key:
+
+```powershell
+.\tools\sentinelctl.ps1 admin-key-new
+```
+
+Rotacionar a chave de sessão com recriptografia das sessões atuais:
+
+```powershell
+.\tools\sentinelctl.ps1 session-key-rotate
+```
+
+Rotacionar runtime key, admin key e session key em uma passada:
+
+```powershell
+.\tools\sentinelctl.ps1 secrets-rotate
+```
+
 Gerar sem reiniciar:
 
 ```powershell
@@ -321,7 +345,7 @@ Se você quiser alterar o Codex global da máquina em vez do projeto atual:
 Se quiser apontar o Codex global para um Sentinel remoto:
 
 ```powershell
-.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL http://147.15.60.224:8080/v1
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://app.deskimperial.online/suporte/v1
 ```
 
 Como o config padrão agora é local ao projeto, rode o `codex` a partir da pasta do projeto para ele usar `.\.codex\config.toml`.

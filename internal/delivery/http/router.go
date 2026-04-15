@@ -25,6 +25,7 @@ type RouterDeps struct {
 	QuotaRefresher      QuotaRefreshRunner
 	Logger              HandlerLogger
 	APIKey              string
+	AdminAPIKey         string
 	DefaultModel        string
 }
 
@@ -95,21 +96,28 @@ func NewRouter(deps RouterDeps) http.Handler {
 		mux.HandleFunc("/v1/v1/backend-api/codex/responses", codexHandler)
 	}
 	if deps.AccountLister != nil && deps.AccountStatusSetter != nil {
-		mux.HandleFunc("/admin/accounts", method(http.MethodGet, auth(deps.APIKey, GetAdminAccountsHandler(deps.AccountLister))))
-		mux.HandleFunc("/admin/accounts/{id}/disable", method(http.MethodPost, auth(deps.APIKey, PostAdminAccountStatusHandler(deps.AccountStatusSetter, domain.AccountRoutingDisabled, deps.Logger))))
-		mux.HandleFunc("/admin/accounts/{id}/enable", method(http.MethodPost, auth(deps.APIKey, PostAdminAccountStatusHandler(deps.AccountStatusSetter, domain.AccountRoutingActive, deps.Logger))))
+		mux.HandleFunc("/admin/accounts", method(http.MethodGet, auth(adminAPIKey(deps), GetAdminAccountsHandler(deps.AccountLister))))
+		mux.HandleFunc("/admin/accounts/{id}/disable", method(http.MethodPost, auth(adminAPIKey(deps), PostAdminAccountStatusHandler(deps.AccountStatusSetter, domain.AccountRoutingDisabled, deps.Logger))))
+		mux.HandleFunc("/admin/accounts/{id}/enable", method(http.MethodPost, auth(adminAPIKey(deps), PostAdminAccountStatusHandler(deps.AccountStatusSetter, domain.AccountRoutingActive, deps.Logger))))
 	}
 	if deps.AccountLister != nil && deps.RotationInspector != nil {
-		mux.HandleFunc("/admin/state", method(http.MethodGet, auth(deps.APIKey, GetAdminStateHandler(deps.AccountLister, deps.RotationInspector, deps.ForceModeManager))))
+		mux.HandleFunc("/admin/state", method(http.MethodGet, auth(adminAPIKey(deps), GetAdminStateHandler(deps.AccountLister, deps.RotationInspector, deps.ForceModeManager))))
 	}
 	if deps.ForceModeManager != nil {
-		mux.HandleFunc("/admin/force", method(http.MethodPost, auth(deps.APIKey, PostAdminForceModeHandler(deps.ForceModeManager, deps.Logger))))
+		mux.HandleFunc("/admin/force", method(http.MethodPost, auth(adminAPIKey(deps), PostAdminForceModeHandler(deps.ForceModeManager, deps.Logger))))
 	}
 	if deps.QuotaRefresher != nil {
-		mux.HandleFunc("/admin/quota/refresh", method(http.MethodPost, auth(deps.APIKey, PostAdminQuotaRefreshHandler(deps.QuotaRefresher, deps.AccountLister, deps.Logger))))
+		mux.HandleFunc("/admin/quota/refresh", method(http.MethodPost, auth(adminAPIKey(deps), PostAdminQuotaRefreshHandler(deps.QuotaRefresher, deps.AccountLister, deps.Logger))))
 	}
 
 	return mux
+}
+
+func adminAPIKey(deps RouterDeps) string {
+	if deps.AdminAPIKey != "" {
+		return deps.AdminAPIKey
+	}
+	return deps.APIKey
 }
 
 func auth(apiKey string, next http.HandlerFunc) http.HandlerFunc {

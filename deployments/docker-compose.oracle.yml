@@ -1,0 +1,47 @@
+services:
+  sentinel:
+    image: project-sentinel:latest
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+    container_name: sentinel
+    env_file:
+      - ../.env
+    expose:
+      - "8080"
+    volumes:
+      - ../sessions:/data/sessions
+    environment:
+      APP_ENV: production
+      SESSION_STORE_PATH: /data/sessions
+      STATE_DB_PATH: /data/sessions/state.db
+      MODELS_CONFIG_PATH: /app/configs/models.json
+    restart: unless-stopped
+    networks:
+      - sentinel_private
+
+  caddy:
+    image: caddy:2.9-alpine
+    container_name: sentinel-caddy
+    depends_on:
+      - sentinel
+    env_file:
+      - ../.env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    networks:
+      - sentinel_private
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  sentinel_private:
+    driver: bridge

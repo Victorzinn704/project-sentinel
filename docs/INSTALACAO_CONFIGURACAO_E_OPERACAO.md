@@ -66,6 +66,7 @@ Copy-Item .env.example .env
 Edite os campos obrigatorios em `.env`:
 
 - `SENTINEL_API_KEY`
+- `SENTINEL_ADMIN_API_KEY`
 - `SESSION_ENCRYPTION_KEY` (32 bytes exatos)
 - `HTTP_ADDR` (normalmente `:8080`)
 - `DEFAULT_MODEL` (normalmente `sentinel-router`)
@@ -74,6 +75,7 @@ Checklist minimo do `.env`:
 
 ```txt
 SENTINEL_API_KEY: preenchido com valor unico seu
+SENTINEL_ADMIN_API_KEY: diferente da runtime key
 SESSION_ENCRYPTION_KEY: 32 caracteres
 HTTP_ADDR: :8080
 DEFAULT_MODEL: sentinel-router
@@ -137,7 +139,34 @@ Revogar chave anterior:
 .\tools\sentinelctl.ps1 key-revoke
 ```
 
-## 5.2 Chave usada pelo Codex CLI (CODEX_API_KEY)
+## 5.2 Chave da API administrativa (SENTINEL_ADMIN_API_KEY)
+
+Ver chave mascarada:
+
+```powershell
+.\tools\sentinelctl.ps1 admin-key-show
+```
+
+Rotacionar chave:
+
+```powershell
+.\tools\sentinelctl.ps1 admin-key-new
+```
+
+## 5.3 Chave de sessão (SESSION_ENCRYPTION_KEY)
+
+Rotacionar a chave de sessão e recriptografar os arquivos `sessions/*.json.enc`:
+
+```powershell
+.\tools\sentinelctl.ps1 session-key-rotate
+```
+
+Rotacionar runtime key, admin key e session key de uma vez:
+
+```powershell
+.\tools\sentinelctl.ps1 secrets-rotate
+```
+## 5.4 Chave usada pelo Codex CLI (CODEX_API_KEY)
 
 Instalar provider local do Sentinel no Codex:
 
@@ -154,7 +183,7 @@ Persistir no ambiente do usuario Windows:
 Apontar para Sentinel remoto:
 
 ```powershell
-.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL http://SEU_HOST:8080/v1
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://app.deskimperial.online/suporte/v1
 ```
 
 ## 6. Cadastro de contas
@@ -326,18 +355,39 @@ Se o guard mostrar `[BLOCK]`:
 
 ## 11. Deploy remoto (Oracle VM exemplo)
 
-Deploy tipico com Docker no servidor:
+Pré-requisitos do caminho principal:
+
+- host DNS apontando para a Oracle VM, ou proxy principal roteando o prefixo para ela
+- portas `80` e `443` liberadas na OCI Security List/NSG
+- variáveis `SENTINEL_PUBLIC_HOST`, `SENTINEL_PUBLIC_PREFIX` e `LETSENCRYPT_EMAIL` preenchidas no `.env`
+- `SENTINEL_ADMIN_API_KEY` diferente da runtime key
+
+Observacao importante:
+
+- se `app.deskimperial.online` ja estiver servindo outro app em outra infra, este `docker-compose.oracle.yml` nao pode assumir `80/443` ao mesmo tempo
+- nesse caso, voce integra a regra `/suporte/*` no proxy principal existente, ou usa um subdominio proprio do Sentinel
+
+Exemplo minimo no `.env` do servidor:
+
+```txt
+SENTINEL_PUBLIC_HOST=app.deskimperial.online
+SENTINEL_PUBLIC_PREFIX=/suporte
+LETSENCRYPT_EMAIL=ops@example.com
+CODEX_BASE_URL=https://app.deskimperial.online/suporte/v1
+```
+
+Deploy tipico com HTTPS terminado em Caddy:
 
 ```bash
 cd /opt/project-sentinel
-docker compose -f deployments/docker-compose.yml up --build -d
+docker compose -f deployments/docker-compose.oracle.yml up --build -d
 ```
 
 Validacao pos-deploy:
 
 ```bash
 docker ps | grep sentinel
-curl -sS http://127.0.0.1:8080/healthz
+curl -sS https://app.deskimperial.online/suporte/healthz
 ```
 
 ## 12. Boas praticas de seguranca
@@ -345,5 +395,5 @@ curl -sS http://127.0.0.1:8080/healthz
 - nunca commitar `.env`
 - nunca commitar `sessions/*.json.enc`
 - nunca commitar `tools/auto-login/credentials.json`
-- rotacionar `SENTINEL_API_KEY` periodicamente
+- rotacionar `SENTINEL_API_KEY` e `SENTINEL_ADMIN_API_KEY` periodicamente
 - proteger `SESSION_ENCRYPTION_KEY` em cofre seguro

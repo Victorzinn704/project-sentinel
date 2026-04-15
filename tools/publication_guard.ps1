@@ -82,6 +82,7 @@ try {
 
     $safeLineRegex = @(
         "sk-sentinel-replace-with-a-random-local-api-key",
+        "sk-sentinel-admin-replace-with-a-different-random-local-api-key",
         "replace-with-a-random-local-api-key",
         "SESSION_ENCRYPTION_KEY=change-this-key-32-bytes-long!!!",
         "SESSION_ENCRYPTION_KEY=32-bytes-exatos-aqui",
@@ -117,7 +118,7 @@ try {
             if ($isSafeExample) { continue }
 
             foreach ($pattern in $secretPatterns) {
-                if ($line -match $pattern.Regex) {
+                if ($line -cmatch $pattern.Regex) {
                     $findings.Add([pscustomobject]@{
                         File    = $path
                         Line    = $i + 1

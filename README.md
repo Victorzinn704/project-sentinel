@@ -2,7 +2,9 @@
 
 Gateway local OpenAI-compatible para usar contas ChatGPT/Codex com rotação, controle operacional, monitoramento por terminal e endpoints de administração.
 
-O Sentinel fica entre seu app/IDE e o upstream ChatGPT. Você aponta o cliente para `http://127.0.0.1:8080/v1`, usa a `SENTINEL_API_KEY`, escolhe `sentinel-router` ou `gpt-5.4`, e o projeto cuida de resolver modelo, escolher conta, criar lease, chamar o provider e registrar consumo.
+O Sentinel fica entre seu app/IDE e o upstream ChatGPT. Você aponta o cliente para `http://127.0.0.1:8080/v1` no uso local, ou para `https://app.deskimperial.online/suporte/v1` no uso remoto, usa a `SENTINEL_API_KEY`, escolhe `sentinel-router` ou `gpt-5.4`, e o projeto cuida de resolver modelo, escolher conta, criar lease, chamar o provider e registrar consumo.
+
+Quando você quiser publicar sob um caminho como `/suporte`, o host público precisa terminar TLS na mesma stack do Sentinel, ou o proxy principal do site precisa encaminhar esse prefixo para a Oracle VM.
 
 ## Comece Aqui (Para Publicar No GitHub)
 
@@ -50,7 +52,7 @@ Antes de qualquer `git push`, rode:
 - Marca contas com falha de autenticação como `attention_required`.
 - Respeita cooldown em `429` usando `Retry-After` real quando disponível.
 - Permite fixar uma conta por request com `X-Sentinel-Force-Account`.
-- Permite gerar, revogar e rotacionar a API key local via terminal.
+- Permite gerar, revogar e rotacionar runtime key, admin key e session key via terminal.
 
 ## Estrutura Mental
 
@@ -180,7 +182,7 @@ Se você realmente quiser mexer no Codex global da máquina:
 Se quiser apontar o Codex para um Sentinel remoto:
 
 ```powershell
-.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL http://147.15.60.224:8080/v1
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://app.deskimperial.online/suporte/v1
 ```
 
 Como o config padrão agora é local ao projeto, abra o `codex` a partir desta pasta para ele enxergar `.\.codex\config.toml`.
@@ -319,6 +321,25 @@ Revogar por rotação:
 .\tools\sentinelctl.ps1 key-revoke
 ```
 
+Ver ou girar a admin key:
+
+```powershell
+.\tools\sentinelctl.ps1 admin-key-show
+.\tools\sentinelctl.ps1 admin-key-new
+```
+
+Rotacionar a chave de sessão com recriptografia das sessões atuais:
+
+```powershell
+.\tools\sentinelctl.ps1 session-key-rotate
+```
+
+Rotacionar runtime key, admin key e session key numa passada:
+
+```powershell
+.\tools\sentinelctl.ps1 secrets-rotate
+```
+
 Gerar com mais bytes:
 
 ```powershell
@@ -384,6 +405,7 @@ DEFAULT_MODEL=sentinel-router
 DEFAULT_REASONING_EFFORT=auto
 REQUEST_TIMEOUT_SECONDS=120
 SENTINEL_API_KEY=sk-sentinel-sua-key
+SENTINEL_ADMIN_API_KEY=sk-sentinel-admin-sua-key
 SESSION_ENCRYPTION_KEY=32-bytes-exatos-aqui
 ```
 
@@ -439,12 +461,14 @@ Registro de conta:
 POST /accounts
 ```
 
-Todos os endpoints protegidos aceitam:
+Endpoints OpenAI-compatible aceitam:
 
 ```txt
 X-API-Key: <SENTINEL_API_KEY>
 Authorization: Bearer <SENTINEL_API_KEY>
 ```
+
+Quando `SENTINEL_ADMIN_API_KEY` estiver configurada, os endpoints `/admin/*` exigem essa chave dedicada.
 
 ## Build E Testes
 
@@ -462,7 +486,7 @@ $env:GOCACHE = Join-Path (Get-Location) ".tools\gocache"
 - Não commite `sessions/*.json.enc`.
 - Guarde `SESSION_ENCRYPTION_KEY`; sem ela as sessões criptografadas não abrem.
 - Rode em `127.0.0.1` se for uso local.
-- Troque `SENTINEL_API_KEY` com `key-new` quando compartilhar tela, logs ou ambiente.
+- Troque `SENTINEL_API_KEY` e `SENTINEL_ADMIN_API_KEY` com `secrets-rotate` quando compartilhar tela, logs ou ambiente.
 
 ## Documentação Adicional
 
