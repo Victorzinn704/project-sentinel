@@ -12,6 +12,7 @@ type RouterDeps struct {
 	ReadyCheck          func(context.Context) error
 	AccountRegistrar    AccountRegistrar
 	Executor            Executor
+	CodexPassthrough    CodexPassthrough
 	ModelLister         ModelLister
 	ModelResolver       ModelResolver
 	AccountAcquirer     AccountAcquirer
@@ -69,6 +70,17 @@ func NewRouter(deps RouterDeps) http.Handler {
 		mux.HandleFunc("/responses", responsesHandler)
 		mux.HandleFunc("/v1/responses", responsesHandler)
 		mux.HandleFunc("/v1/v1/responses", responsesHandler)
+	}
+
+	if deps.CodexPassthrough != nil && deps.AccountAcquirer != nil && deps.SessionLoader != nil && deps.LeaseReleaser != nil {
+		codexHandler := method(http.MethodPost, auth(deps.APIKey, PostCodexPassthroughHandler(
+			deps.CodexPassthrough,
+			deps.AccountAcquirer,
+			deps.SessionLoader,
+			deps.LeaseReleaser,
+			deps.Logger,
+		)))
+		mux.HandleFunc("/backend-api/codex/responses", codexHandler)
 	}
 	if deps.AccountLister != nil && deps.AccountStatusSetter != nil {
 		mux.HandleFunc("/admin/accounts", method(http.MethodGet, auth(deps.APIKey, GetAdminAccountsHandler(deps.AccountLister))))

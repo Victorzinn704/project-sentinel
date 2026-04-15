@@ -110,6 +110,7 @@ func run() error {
 	router := httpdelivery.NewRouter(httpdelivery.RouterDeps{
 		AccountRegistrar:    accountService,
 		Executor:            providerRegistry,
+		CodexPassthrough:    chatGPTAdapter,
 		ModelLister:         modelRegistry,
 		ModelResolver:       modelRegistry,
 		AccountAcquirer:     stateStore,
