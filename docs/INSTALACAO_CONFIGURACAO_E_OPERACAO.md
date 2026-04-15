@@ -183,7 +183,7 @@ Persistir no ambiente do usuario Windows:
 Apontar para Sentinel remoto:
 
 ```powershell
-.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://app.deskimperial.online/suporte/v1
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://sentinel.deskimperial.online/v1
 ```
 
 ## 6. Cadastro de contas
@@ -357,23 +357,22 @@ Se o guard mostrar `[BLOCK]`:
 
 Pré-requisitos do caminho principal:
 
-- host DNS apontando para a Oracle VM, ou proxy principal roteando o prefixo para ela
-- portas `80` e `443` liberadas na OCI Security List/NSG
-- variáveis `SENTINEL_PUBLIC_HOST`, `SENTINEL_PUBLIC_PREFIX` e `LETSENCRYPT_EMAIL` preenchidas no `.env`
+- subdomínio dedicado (ex.: `sentinel.seudominio.com`) apontado por `A record` para o IP público da VM (no Cloudflare, mantenha o registro como *DNS only* / nuvem cinza, senão o proxy intercepta o desafio HTTP-01 do Let's Encrypt)
+- portas `80` e `443` liberadas na OCI Security List/NSG **e** no firewall local da VM (`iptables`/`ufw`)
+- variáveis `SENTINEL_PUBLIC_HOST` e `LETSENCRYPT_EMAIL` preenchidas no `.env`
 - `SENTINEL_ADMIN_API_KEY` diferente da runtime key
 
 Observacao importante:
 
-- se `app.deskimperial.online` ja estiver servindo outro app em outra infra, este `docker-compose.oracle.yml` nao pode assumir `80/443` ao mesmo tempo
-- nesse caso, voce integra a regra `/suporte/*` no proxy principal existente, ou usa um subdominio proprio do Sentinel
+- o `docker-compose.oracle.yml` assume `80/443` no host. Não suba em uma máquina que já termine TLS para outro app nessas portas
+- se quiser publicar sob um caminho (ex.: `/suporte`) no proxy de um site existente, não use este compose; configure `proxy_pass http://<vm_ip>:8080/` no nginx/Caddy principal
 
 Exemplo minimo no `.env` do servidor:
 
 ```txt
-SENTINEL_PUBLIC_HOST=app.deskimperial.online
-SENTINEL_PUBLIC_PREFIX=/suporte
-LETSENCRYPT_EMAIL=ops@example.com
-CODEX_BASE_URL=https://app.deskimperial.online/suporte/v1
+SENTINEL_PUBLIC_HOST=sentinel.seudominio.com
+LETSENCRYPT_EMAIL=ops@seudominio.com
+CODEX_BASE_URL=https://sentinel.seudominio.com/v1
 ```
 
 Deploy tipico com HTTPS terminado em Caddy:
@@ -387,7 +386,7 @@ Validacao pos-deploy:
 
 ```bash
 docker ps | grep sentinel
-curl -sS https://app.deskimperial.online/suporte/healthz
+curl -sS https://sentinel.seudominio.com/healthz
 ```
 
 ## 12. Boas praticas de seguranca

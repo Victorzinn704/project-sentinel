@@ -2,9 +2,9 @@
 
 Gateway local OpenAI-compatible para usar contas ChatGPT/Codex com rotação, controle operacional, monitoramento por terminal e endpoints de administração.
 
-O Sentinel fica entre seu app/IDE e o upstream ChatGPT. Você aponta o cliente para `http://127.0.0.1:8080/v1` no uso local, ou para `https://app.deskimperial.online/suporte/v1` no uso remoto, usa a `SENTINEL_API_KEY`, escolhe `sentinel-router` ou `gpt-5.4`, e o projeto cuida de resolver modelo, escolher conta, criar lease, chamar o provider e registrar consumo.
+O Sentinel fica entre seu app/IDE e o upstream ChatGPT. Você aponta o cliente para `http://127.0.0.1:8080/v1` no uso local, ou para `https://sentinel.deskimperial.online/v1` no uso remoto, usa a `SENTINEL_API_KEY`, escolhe `sentinel-router` ou `gpt-5.4`, e o projeto cuida de resolver modelo, escolher conta, criar lease, chamar o provider e registrar consumo.
 
-Quando você quiser publicar sob um caminho como `/suporte`, o host público precisa terminar TLS na mesma stack do Sentinel, ou o proxy principal do site precisa encaminhar esse prefixo para a Oracle VM.
+Para publicação remota, aponte um subdomínio dedicado (`A record` → IP da VM) para o host que roda o stack `deployments/docker-compose.oracle.yml`; o Caddy embutido emite TLS via Let's Encrypt e faz reverse-proxy para o container do Sentinel.
 
 ## Comece Aqui (Para Publicar No GitHub)
 
@@ -182,7 +182,7 @@ Se você realmente quiser mexer no Codex global da máquina:
 Se quiser apontar o Codex para um Sentinel remoto:
 
 ```powershell
-.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://app.deskimperial.online/suporte/v1
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://sentinel.deskimperial.online/v1
 ```
 
 Como o config padrão agora é local ao projeto, abra o `codex` a partir desta pasta para ele enxergar `.\.codex\config.toml`.

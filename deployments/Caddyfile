@@ -4,10 +4,5 @@
 
 {$SENTINEL_PUBLIC_HOST} {
     encode zstd gzip
-
-    redir {$SENTINEL_PUBLIC_PREFIX} {$SENTINEL_PUBLIC_PREFIX}/ 308
-
-    handle_path {$SENTINEL_PUBLIC_PREFIX}/* {
-        reverse_proxy sentinel:8080
-    }
+    reverse_proxy sentinel:8080
 }
