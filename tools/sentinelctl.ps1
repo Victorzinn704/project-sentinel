@@ -218,19 +218,19 @@ Usage:
     .\tools\sentinelctl.ps1 consumo
     .\tools\sentinelctl.ps1 consumo-watch
     .\tools\sentinelctl.ps1 consumo-watch 5
-    .\tools\sentinelctl.ps1 consumo -BaseURL http://147.15.60.224:8080/v1
+    .\tools\sentinelctl.ps1 consumo -BaseURL https://<SENTINEL_HOST>/v1
   .\tools\sentinelctl.ps1 accounts
   .\tools\sentinelctl.ps1 models
   .\tools\sentinelctl.ps1 chat -Model gpt-5.4 -Effort high -Prompt "Responda apenas: ok"
   .\tools\sentinelctl.ps1 test
   .\tools\sentinelctl.ps1 quota-refresh
-  .\tools\sentinelctl.ps1 force acc_contato_deskimperial_online
+  .\tools\sentinelctl.ps1 force <ACCOUNT_ID>
   .\tools\sentinelctl.ps1 unforce
-  .\tools\sentinelctl.ps1 disable acc_suporte_deskimperial_online
-  .\tools\sentinelctl.ps1 enable acc_suporte_deskimperial_online
+  .\tools\sentinelctl.ps1 disable <ACCOUNT_ID>
+  .\tools\sentinelctl.ps1 enable <ACCOUNT_ID>
   .\tools\sentinelctl.ps1 use-model gpt-5.4 -Effort xhigh
   .\tools\sentinelctl.ps1 codex-install
-  .\tools\sentinelctl.ps1 codex-install -BaseURL http://147.15.60.224:8080/v1
+  .\tools\sentinelctl.ps1 codex-install -BaseURL https://<SENTINEL_HOST>/v1
   .\tools\sentinelctl.ps1 codex-install -GlobalConfig
   .\tools\sentinelctl.ps1 codex-install -Persist
   .\tools\sentinelctl.ps1 key-show

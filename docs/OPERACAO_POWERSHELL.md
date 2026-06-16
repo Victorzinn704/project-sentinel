@@ -7,7 +7,7 @@ Guia rápido para abrir, rodar, monitorar e controlar o Project Sentinel no Wind
 Abra o PowerShell e entre na pasta:
 
 ```powershell
-cd C:\Users\Desktop\Documents\project-sentinel
+cd <CAMINHO_DO_REPOSITORIO>\project-sentinel
 ```
 
 Se quiser abrir a pasta no Explorer:
@@ -216,7 +216,7 @@ Gerar sem reiniciar:
 Forçar conta específica:
 
 ```powershell
-.\tools\sentinelctl.ps1 force acc_contato_deskimperial_online
+.\tools\sentinelctl.ps1 force <ACCOUNT_ID>
 ```
 
 Limpar force mode:
@@ -228,13 +228,13 @@ Limpar force mode:
 Desabilitar:
 
 ```powershell
-.\tools\sentinelctl.ps1 disable acc_suporte_deskimperial_online
+.\tools\sentinelctl.ps1 disable <ACCOUNT_ID>
 ```
 
 Habilitar:
 
 ```powershell
-.\tools\sentinelctl.ps1 enable acc_suporte_deskimperial_online
+.\tools\sentinelctl.ps1 enable <ACCOUNT_ID>
 ```
 
 ## 9. Usar Em IDE Ou App
@@ -321,7 +321,7 @@ Se você quiser alterar o Codex global da máquina em vez do projeto atual:
 Se quiser apontar o Codex global para um Sentinel remoto:
 
 ```powershell
-.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL http://147.15.60.224:8080/v1
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://<SENTINEL_HOST>/v1
 ```
 
 Como o config padrão agora é local ao projeto, rode o `codex` a partir da pasta do projeto para ele usar `.\.codex\config.toml`.
