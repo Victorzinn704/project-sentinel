@@ -66,7 +66,7 @@ Antes de qualquer `git push`, rode:
 Abra o PowerShell e entre na pasta do projeto:
 
 ```powershell
-cd C:\Users\Desktop\Documents\project-sentinel
+cd <CAMINHO_DO_REPOSITORIO>\project-sentinel
 ```
 
 Se o Windows bloquear scripts só nesta sessão:
@@ -180,7 +180,7 @@ Se você realmente quiser mexer no Codex global da máquina:
 Se quiser apontar o Codex para um Sentinel remoto:
 
 ```powershell
-.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL http://147.15.60.224:8080/v1
+.\tools\sentinelctl.ps1 codex-install -GlobalConfig -BaseURL https://<SENTINEL_HOST>/v1
 ```
 
 Como o config padrão agora é local ao projeto, abra o `codex` a partir desta pasta para ele enxergar `.\.codex\config.toml`.
@@ -343,7 +343,7 @@ sk-sentinel-<random-base64url>
 Forçar uma conta específica:
 
 ```powershell
-.\tools\sentinelctl.ps1 force acc_contato_deskimperial_online
+.\tools\sentinelctl.ps1 force <ACCOUNT_ID>
 ```
 
 Limpar force mode:
@@ -355,13 +355,13 @@ Limpar force mode:
 Desabilitar uma conta:
 
 ```powershell
-.\tools\sentinelctl.ps1 disable acc_suporte_deskimperial_online
+.\tools\sentinelctl.ps1 disable <ACCOUNT_ID>
 ```
 
 Reabilitar uma conta:
 
 ```powershell
-.\tools\sentinelctl.ps1 enable acc_suporte_deskimperial_online
+.\tools\sentinelctl.ps1 enable <ACCOUNT_ID>
 ```
 
 ## Configuração
@@ -466,6 +466,10 @@ $env:GOCACHE = Join-Path (Get-Location) ".tools\gocache"
 
 ## Documentação Adicional
 
+- [Índice de Documentação](docs/INDEX.md)
+- [Casos de Uso e Matriz de Testes](docs/product/use-cases.md)
+- [Guia de Testes](docs/testing/testing-guide.md)
+- [Validação Local](docs/testing/local-validation.md)
 - [Instalação, Configuração e Operação](docs/INSTALACAO_CONFIGURACAO_E_OPERACAO.md)
 - [Guia de Treinamento (Train The Trainer)](docs/GUIA_TREINAMENTO.md)
 - [Checklist de Publicação no GitHub](docs/CHECKLIST_PUBLICACAO_GITHUB.md)

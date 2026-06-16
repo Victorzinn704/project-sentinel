@@ -161,13 +161,13 @@ ROTATION_STRATEGY=quota_first
 Force mode global:
 
 ```powershell
-.\tools\sentinelctl.ps1 force acc_contato_deskimperial_online
+.\tools\sentinelctl.ps1 force <ACCOUNT_ID>
 ```
 
 Header por request:
 
 ```txt
-X-Sentinel-Force-Account: acc_contato_deskimperial_online
+X-Sentinel-Force-Account: <ACCOUNT_ID>
 ```
 
 O Sentinel não faz fallback silencioso se a conta forçada estiver indisponível.
