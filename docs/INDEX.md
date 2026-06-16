@@ -28,6 +28,7 @@ Este índice separa documentação pública, operação diária, arquitetura e v
 | Documento | Papel |
 | --- | --- |
 | [`testing/testing-guide.md`](testing/testing-guide.md) | Como rodar testes, guard de publicação e validações por camada. |
+| [`testing/use-case-test-matrix.md`](testing/use-case-test-matrix.md) | Matriz operacional entre casos de uso, regras, arquivos, testes, evidências e limites. |
 | [`testing/local-validation.md`](testing/local-validation.md) | Registro de validação local desta revisão e limitações do ambiente. |
 | [`../Sentinel_Tests.postman_collection.json`](../Sentinel_Tests.postman_collection.json) | Coleção Postman para smoke/API quando o servidor estiver rodando. |
 

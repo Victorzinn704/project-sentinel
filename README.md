@@ -469,6 +469,7 @@ $env:GOCACHE = Join-Path (Get-Location) ".tools\gocache"
 - [Índice de Documentação](docs/INDEX.md)
 - [Casos de Uso e Matriz de Testes](docs/product/use-cases.md)
 - [Guia de Testes](docs/testing/testing-guide.md)
+- [Matriz Operacional de Testes e Evidências](docs/testing/use-case-test-matrix.md)
 - [Validação Local](docs/testing/local-validation.md)
 - [Instalação, Configuração e Operação](docs/INSTALACAO_CONFIGURACAO_E_OPERACAO.md)
 - [Guia de Treinamento (Train The Trainer)](docs/GUIA_TREINAMENTO.md)

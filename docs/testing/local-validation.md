@@ -102,3 +102,31 @@ Conclusão: a suíte Go não foi rodada nesta máquina. O comando esperado conti
 | Account IDs específicos trocados por `<ACCOUNT_ID>` | Evitar parecer dado operacional real. |
 | Caminho local absoluto trocado por `<CAMINHO_DO_REPOSITORIO>` | Tornar o guia portável. |
 | Casos de uso e matriz de testes adicionados | Ligar promessa pública a validação. |
+
+## Revalidação Da Matriz Operacional - 2026-06-16
+
+Escopo: criação de `docs/testing/use-case-test-matrix.md` e links na documentação principal.
+
+Comandos executados:
+
+```powershell
+.\tools\publication_guard.ps1
+git diff --check
+```
+
+Também foi executado parser PowerShell em `tools\sentinelctl.ps1` e varredura local de exemplos concretos sensíveis nos arquivos públicos revisados.
+
+Resultado:
+
+| Área | Resultado |
+| --- | --- |
+| Publication guard | Passou sem bloqueios. |
+| Parser PowerShell | `sentinelctl.ps1` continuou parseável. |
+| Diff | Sem erro de whitespace; apenas aviso esperado `LF -> CRLF` no Windows. |
+| Higiene pública | Sem IP remoto específico, account IDs operacionais, caminho local do autor ou token GitHub. |
+
+Limite mantido:
+
+- Go continua indisponível nesta máquina;
+- a suíte Go deve ser rodada em ambiente com Go 1.25+ ou runtime `.tools/go`;
+- smoke ponta a ponta continua dependente de sessão autorizada e não deve ir para CI público.
