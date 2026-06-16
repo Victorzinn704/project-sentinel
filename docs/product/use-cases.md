@@ -4,6 +4,8 @@ Data da revisão: 2026-06-16.
 
 O Project Sentinel é um gateway local OpenAI-compatible. Ele deve ser usado apenas com contas, sessões e provedores que o operador tem autorização para usar. A documentação pública evita exemplos com conta real, host real ou segredo.
 
+A versão operacional da matriz, focada em comandos de validação e evidências, fica em `docs/testing/use-case-test-matrix.md`.
+
 ## 1. Público e contexto
 
 | Público | Situação real de uso | Problema que tenta resolver | Criticidade |

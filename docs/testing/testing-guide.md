@@ -2,6 +2,8 @@
 
 Este guia descreve quais validações existem e quando usar cada uma. Não use sessão real, API key real ou banco local como fixture pública.
 
+A matriz operacional que liga casos de uso, regras, arquivos, testes, evidências e limites fica em `docs/testing/use-case-test-matrix.md`.
+
 ## 1. Pré-requisitos
 
 | Item | Uso |
