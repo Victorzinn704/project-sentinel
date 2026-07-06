@@ -81,10 +81,10 @@ try {
     )
 
     $safeLineRegex = @(
-        "sk-sentinel-replace-with-a-random-local-api-key",
         "replace-with-a-random-local-api-key",
+        "SENTINEL_API_KEY=replace-with-local-api-key",
         "SESSION_ENCRYPTION_KEY=change-this-key-32-bytes-long!!!",
-        "SESSION_ENCRYPTION_KEY=32-bytes-exatos-aqui",
+        "SESSION_ENCRYPTION_KEY=change-me",
         "YOUR_OUTLOOK_PASSWORD_",
         "YOUR_CHATGPT_PASSWORD_"
     )

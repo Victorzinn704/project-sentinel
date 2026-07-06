@@ -383,8 +383,8 @@ ROTATION_STRATEGY=quota_first
 DEFAULT_MODEL=sentinel-router
 DEFAULT_REASONING_EFFORT=auto
 REQUEST_TIMEOUT_SECONDS=120
-SENTINEL_API_KEY=sk-sentinel-sua-key
-SESSION_ENCRYPTION_KEY=32-bytes-exatos-aqui
+SENTINEL_API_KEY=replace-with-local-api-key
+SESSION_ENCRYPTION_KEY=change-me
 ```
 
 Estratégias de rotação aceitas:
