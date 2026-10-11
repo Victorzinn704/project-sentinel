@@ -26,3 +26,7 @@ No Windows, rode tambem:
 - nao publique API keys, tokens, bancos SQLite locais ou logs reais;
 - trate exemplos de configuracao como placeholders;
 - documente qualquer mudanca que altere autorizacao, auditoria ou retencao.
+
+## Fluxo Git e revisão
+
+Siga também o [fluxo de issues, branches, commits e pull requests](CONTRIBUTING-GIT.md).
