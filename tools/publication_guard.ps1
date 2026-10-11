@@ -80,13 +80,11 @@ try {
         @{ Name = "OpenAI resource key suspeita"; Regex = "OPENAI_RESOURCE_\d+_API_KEY\s*=\s*[^\r\n#]+" }
     )
 
+    # Ignore apenas linhas completas de exemplo; um placeholder nao libera outros tokens.
     $safeLineRegex = @(
-        "sk-sentinel-replace-with-a-random-local-api-key",
-        "replace-with-a-random-local-api-key",
-        "SESSION_ENCRYPTION_KEY=change-this-key-32-bytes-long!!!",
-        "SESSION_ENCRYPTION_KEY=32-bytes-exatos-aqui",
-        "YOUR_OUTLOOK_PASSWORD_",
-        "YOUR_CHATGPT_PASSWORD_"
+        '^\s*SENTINEL_API_KEY\s*=\s*(?:sk-sentinel-(?:replace-with-a-random-local-api-key)|replace-with-local-api-key)\s*$'
+        '^\s*SESSION_ENCRYPTION_KEY\s*=\s*(?:change-this-key-32-bytes-long!!!|change-me)\s*$'
+        '^\s*"value"\s*:\s*"Bearer\s+replace-with-a-random-local-api-key"\s*,?\s*$'
     )
 
     foreach ($path in $tracked) {
