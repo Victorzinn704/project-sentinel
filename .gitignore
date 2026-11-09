@@ -37,3 +37,24 @@ tools/auto-login/credentials.json
 
 .DS_Store
 Thumbs.db
+
+# Public repository boundary (security review 2026-11-08)
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+credentials*.json
+service-account*.json
+secrets/
+private/
+data/private/
+*.log
+*.bundle
